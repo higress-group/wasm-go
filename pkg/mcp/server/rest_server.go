@@ -27,9 +27,9 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/tidwall/sjson"
 
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/log"
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/mcp/utils"
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/wrapper"
+	"github.com/higress-group/wasm-go/pkg/log"
+	"github.com/higress-group/wasm-go/pkg/mcp/utils"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 // RestToolArg represents an argument for a REST tool

@@ -19,8 +19,8 @@ import (
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/mcp/utils"
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/wrapper"
+	"github.com/higress-group/wasm-go/pkg/mcp/utils"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 const (

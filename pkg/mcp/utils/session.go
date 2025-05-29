@@ -19,8 +19,8 @@ import (
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/log"
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/wrapper"
+	"github.com/higress-group/wasm-go/pkg/log"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 func IsStatefulSession(ctx wrapper.HttpContext) bool {

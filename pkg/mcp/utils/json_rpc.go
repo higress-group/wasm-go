@@ -23,8 +23,8 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/log"
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/wrapper"
+	"github.com/higress-group/wasm-go/pkg/log"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 const (

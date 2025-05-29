@@ -25,10 +25,10 @@ import (
 	"unsafe"
 
 	"github.com/google/uuid"
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/log"
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/matcher"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/wasm-go/pkg/log"
+	"github.com/higress-group/wasm-go/pkg/matcher"
 	"github.com/tidwall/gjson"
 )
 

@@ -17,7 +17,7 @@ package utils
 import (
 	"fmt"
 
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/wrapper"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 func OnMCPResponseSuccess(sendDirectly bool, ctx wrapper.HttpContext, result map[string]any, debugInfo string) {

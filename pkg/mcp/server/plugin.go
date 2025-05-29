@@ -24,9 +24,9 @@ import (
 	"github.com/invopop/jsonschema"
 	"github.com/tidwall/gjson"
 
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/log"
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/mcp/utils"
-	"github.com/higress-group/higress-wasm-go-sdk/pkg/wrapper"
+	"github.com/higress-group/wasm-go/pkg/log"
+	"github.com/higress-group/wasm-go/pkg/mcp/utils"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 const (
