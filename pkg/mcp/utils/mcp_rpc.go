@@ -20,29 +20,29 @@ import (
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
-func OnMCPResponseSuccess(sendDirectly bool, ctx wrapper.HttpContext, result map[string]any, debugInfo string) {
-	OnJsonRpcResponseSuccess(sendDirectly, ctx, result, debugInfo)
+func OnMCPResponseSuccess(ctx wrapper.HttpContext, result map[string]any, debugInfo string) {
+	OnJsonRpcResponseSuccess(ctx, result, debugInfo)
 	// TODO: support pub to redis when use POST + SSE
 }
 
-func OnMCPResponseError(sendDirectly bool, ctx wrapper.HttpContext, err error, code int, debugInfo string) {
-	OnJsonRpcResponseError(sendDirectly, ctx, err, code, debugInfo)
+func OnMCPResponseError(ctx wrapper.HttpContext, err error, code int, debugInfo string) {
+	OnJsonRpcResponseError(ctx, err, code, debugInfo)
 	// TODO: support pub to redis when use POST + SSE
 }
 
-func OnMCPToolCallSuccess(sendDirectly bool, ctx wrapper.HttpContext, content []map[string]any, debugInfo string) {
-	OnMCPResponseSuccess(sendDirectly, ctx, map[string]any{
+func OnMCPToolCallSuccess(ctx wrapper.HttpContext, content []map[string]any, debugInfo string) {
+	OnMCPResponseSuccess(ctx, map[string]any{
 		"content": content,
 		"isError": false,
 	}, debugInfo)
 }
 
-func OnMCPToolCallError(sendDirectly bool, ctx wrapper.HttpContext, err error, debugInfo ...string) {
+func OnMCPToolCallError(ctx wrapper.HttpContext, err error, debugInfo ...string) {
 	responseDebugInfo := fmt.Sprintf("mcp:tools/call:error(%s)", err)
 	if len(debugInfo) > 0 {
 		responseDebugInfo = debugInfo[0]
 	}
-	OnMCPResponseSuccess(sendDirectly, ctx, map[string]any{
+	OnMCPResponseSuccess(ctx, map[string]any{
 		"content": []map[string]any{
 			{
 				"type": "text",
@@ -53,12 +53,12 @@ func OnMCPToolCallError(sendDirectly bool, ctx wrapper.HttpContext, err error, d
 	}, responseDebugInfo)
 }
 
-func SendMCPToolTextResult(sendDirectly bool, ctx wrapper.HttpContext, result string, debugInfo ...string) {
+func SendMCPToolTextResult(ctx wrapper.HttpContext, result string, debugInfo ...string) {
 	responseDebugInfo := "mcp:tools/call::result"
 	if len(debugInfo) > 0 {
 		responseDebugInfo = debugInfo[0]
 	}
-	OnMCPToolCallSuccess(sendDirectly, ctx, []map[string]any{
+	OnMCPToolCallSuccess(ctx, []map[string]any{
 		{
 			"type": "text",
 			"text": result,

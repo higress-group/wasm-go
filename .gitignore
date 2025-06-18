@@ -1,0 +1,8 @@
+out
+*.out
+*.tgz
+*.wasm
+.DS_Store
+coverage.xml
+.idea/
+.vscode/

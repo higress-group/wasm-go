@@ -76,6 +76,8 @@ type HttpContext interface {
 	SetResponseBodyBufferLimit(byteSize uint32)
 	// Make a request to the target service of the current route using the specified URL and header.
 	RouteCall(method, url string, headers [][2]string, body []byte, callback RouteResponseCallback) error
+	// Get the execution phase of the current plugin
+	GetExecutionPhase() HTTPExecutionPhase
 }
 
 type oldParseConfigFunc[PluginConfig any] func(json gjson.Result, config *PluginConfig, log log.Log) error
@@ -88,6 +90,7 @@ type oldOnHttpStreamDoneFunc[PluginConfig any] func(context HttpContext, config 
 type ParseConfigFunc[PluginConfig any] func(json gjson.Result, config *PluginConfig) error
 type ParseRawConfigFunc[PluginConfig any] func(configBytes []byte, config *PluginConfig) error
 type ParseRuleConfigFunc[PluginConfig any] func(json gjson.Result, global PluginConfig, config *PluginConfig) error
+type ParseRawRuleConfigFunc[PluginConfig any] func(configBytes []byte, global PluginConfig, config *PluginConfig) error
 type onHttpHeadersFunc[PluginConfig any] func(context HttpContext, config PluginConfig) types.Action
 type onHttpBodyFunc[PluginConfig any] func(context HttpContext, config PluginConfig, body []byte) types.Action
 type onHttpStreamingBodyFunc[PluginConfig any] func(context HttpContext, config PluginConfig, chunk []byte, isLastChunk bool) []byte
@@ -99,7 +102,7 @@ type CommonVmCtx[PluginConfig any] struct {
 	log                         log.Log
 	hasCustomConfig             bool
 	parseConfig                 ParseRawConfigFunc[PluginConfig]
-	parseRuleConfig             ParseRuleConfigFunc[PluginConfig]
+	parseRuleConfig             ParseRawRuleConfigFunc[PluginConfig]
 	onHttpRequestHeaders        onHttpHeadersFunc[PluginConfig]
 	onHttpRequestBody           onHttpBodyFunc[PluginConfig]
 	onHttpStreamingRequestBody  onHttpStreamingBodyFunc[PluginConfig]
@@ -178,6 +181,8 @@ func ParseRawConfig[PluginConfig any](f ParseRawConfigFunc[PluginConfig]) CtxOpt
 }
 
 type parseOverrideConfigOption[PluginConfig any] struct {
+	parseRawConfigF     ParseRawConfigFunc[PluginConfig]
+	parseRawRuleConfigF ParseRawRuleConfigFunc[PluginConfig]
 	parseConfigF        ParseConfigFunc[PluginConfig]
 	parseRuleConfigF    ParseRuleConfigFunc[PluginConfig]
 	oldParseConfigF     oldParseConfigFunc[PluginConfig]
@@ -185,17 +190,22 @@ type parseOverrideConfigOption[PluginConfig any] struct {
 }
 
 func (o *parseOverrideConfigOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
-	if o.parseConfigF != nil && o.parseRuleConfigF != nil {
+	if o.parseRawConfigF != nil && o.parseRawRuleConfigF != nil {
+		ctx.parseConfig = o.parseRawConfigF
+		ctx.parseRuleConfig = o.parseRawRuleConfigF
+	} else if o.parseConfigF != nil && o.parseRuleConfigF != nil {
 		ctx.parseConfig = func(configBytes []byte, config *PluginConfig) error {
 			return o.parseConfigF(gjson.ParseBytes(configBytes), config)
 		}
-		ctx.parseRuleConfig = o.parseRuleConfigF
+		ctx.parseRuleConfig = func(configBytes []byte, global PluginConfig, config *PluginConfig) error {
+			return o.parseRuleConfigF(gjson.ParseBytes(configBytes), global, config)
+		}
 	} else {
 		ctx.parseConfig = func(configBytes []byte, config *PluginConfig) error {
 			return o.oldParseConfigF(gjson.ParseBytes(configBytes), config, ctx.log)
 		}
-		ctx.parseRuleConfig = func(json gjson.Result, global PluginConfig, config *PluginConfig) error {
-			return o.oldParseRuleConfigF(json, global, config, ctx.log)
+		ctx.parseRuleConfig = func(configBytes []byte, global PluginConfig, config *PluginConfig) error {
+			return o.oldParseRuleConfigF(gjson.ParseBytes(configBytes), global, config, ctx.log)
 		}
 	}
 }
@@ -212,6 +222,13 @@ func ParseOverrideConfig[PluginConfig any](f ParseConfigFunc[PluginConfig], g Pa
 	return &parseOverrideConfigOption[PluginConfig]{
 		parseConfigF:     f,
 		parseRuleConfigF: g,
+	}
+}
+
+func ParseOverrideRawConfig[PluginConfig any](f ParseRawConfigFunc[PluginConfig], g ParseRawRuleConfigFunc[PluginConfig]) CtxOption[PluginConfig] {
+	return &parseOverrideConfigOption[PluginConfig]{
+		parseRawConfigF:     f,
+		parseRawRuleConfigF: g,
 	}
 }
 
@@ -471,7 +488,7 @@ func (ctx *CommonPluginCtx[PluginConfig]) OnPluginStart(int) types.OnPluginStart
 	var parseOverrideConfig func(gjson.Result, PluginConfig, *PluginConfig) error
 	if ctx.vm.parseRuleConfig != nil {
 		parseOverrideConfig = func(js gjson.Result, global PluginConfig, cfg *PluginConfig) error {
-			return ctx.vm.parseRuleConfig(js, global, cfg)
+			return ctx.vm.parseRuleConfig([]byte(js.Raw), global, cfg)
 		}
 	}
 	err = ctx.ParseRuleConfig(jsonData,
@@ -529,7 +546,17 @@ func (ctx *CommonPluginCtx[PluginConfig]) NewHttpContext(contextID uint32) types
 	return httpCtx
 }
 
-type RouteResponseCallback func(sendDirectly bool, statusCode int, responseHeaders [][2]string, responseBody []byte)
+type RouteResponseCallback func(statusCode int, responseHeaders [][2]string, responseBody []byte)
+
+type HTTPExecutionPhase int
+
+const (
+	DecodeHeader HTTPExecutionPhase = iota
+	DecodeData
+	EncodeHeader
+	EncodeData
+	Done
+)
 
 type CommonHttpCtx[PluginConfig any] struct {
 	types.DefaultHttpContext
@@ -545,6 +572,11 @@ type CommonHttpCtx[PluginConfig any] struct {
 	userContext           map[string]interface{}
 	userAttribute         map[string]interface{}
 	responseCallback      RouteResponseCallback
+	executionPhase        HTTPExecutionPhase
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) GetExecutionPhase() HTTPExecutionPhase {
+	return ctx.executionPhase
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) SetContext(key string, value interface{}) {
@@ -700,6 +732,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) SetResponseBodyBufferLimit(size uint32) 
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, endOfStream bool) types.Action {
 	defer recoverFunc()
+	ctx.executionPhase = DecodeHeader
 	requestID, _ := proxywasm.GetHttpRequestHeader("x-request-id")
 	_ = proxywasm.SetProperty([]string{"x_request_id"}, []byte(requestID))
 	config, err := ctx.plugin.GetMatchConfig()
@@ -723,6 +756,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStream bool) types.Action {
 	defer recoverFunc()
+	ctx.executionPhase = DecodeData
 	if ctx.config == nil {
 		return types.ActionContinue
 	}
@@ -756,6 +790,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseHeaders(numHeaders int, endOfStream bool) types.Action {
 	defer recoverFunc()
+	ctx.executionPhase = EncodeHeader
 	if ctx.config == nil {
 		return types.ActionContinue
 	}
@@ -771,7 +806,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseHeaders(numHeaders int, en
 			if status != "" {
 				statusCode, _ = strconv.Atoi(status)
 			}
-			ctx.responseCallback(true, statusCode, headers, nil)
+			ctx.responseCallback(statusCode, headers, nil)
 			return types.HeaderStopAllIterationAndWatermark
 		}
 		ctx.needResponseBody = true
@@ -785,6 +820,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseHeaders(numHeaders int, en
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfStream bool) types.Action {
 	defer recoverFunc()
+	ctx.executionPhase = EncodeData
 	if ctx.config == nil {
 		return types.ActionContinue
 	}
@@ -807,7 +843,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfSt
 		if status != "" {
 			statusCode, _ = strconv.Atoi(status)
 		}
-		ctx.responseCallback(false, statusCode, headers, body)
+		ctx.responseCallback(statusCode, headers, body)
 		return types.ActionContinue
 	}
 	if ctx.plugin.vm.onHttpStreamingResponseBody != nil && ctx.streamingResponseBody {
@@ -835,6 +871,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfSt
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpStreamDone() {
+	ctx.executionPhase = Done
 	defer recoverFunc()
 	if ctx.config == nil {
 		return
@@ -850,8 +887,8 @@ func (ctx *CommonHttpCtx[PluginConfig]) RouteCall(method, rawURL string, headers
 	proxywasm.RemoveHttpRequestHeader("Accept-Encoding")
 	proxywasm.RemoveHttpRequestHeader("Content-Length")
 	requestID := uuid.New().String()
-	ctx.responseCallback = func(sendDirectly bool, statusCode int, responseHeaders [][2]string, responseBody []byte) {
-		callback(sendDirectly, statusCode, responseHeaders, responseBody)
+	ctx.responseCallback = func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
+		callback(statusCode, responseHeaders, responseBody)
 		log.Infof("route call end, id:%s, code:%d, headers:%#v, body:%s", requestID, statusCode, responseHeaders, strings.ReplaceAll(string(responseBody), "\n", `\n`))
 	}
 	orignalMethod, _ := proxywasm.GetHttpRequestHeader(":method")
