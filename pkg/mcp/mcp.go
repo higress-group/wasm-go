@@ -60,15 +60,23 @@ var (
 var (
 	LoadMCPFilter = filter.Load
 
-	InitMCPFIlter = filter.Initialize
+	InitMCPFilter = filter.Initialize
 
 	SetConfigParser = filter.SetConfigParser
 
 	FilterName = filter.FilterName
 
-	SetRequestFilter = filter.SetRequestFilter
+	SetJsonRpcRequestFilter = filter.SetJsonRpcRequestFilter
 
-	SetResponseFilter = filter.SetResponseFilter
+	SetJsonRpcResponseFilter = filter.SetJsonRpcResponseFilter
 
-	OnJsonRpcError = filter.OnJsonRpcError
+	SetFallbackHTTPRequestFilter = filter.SetFallbackHTTPRequestFilter
+
+	SetFallbackHTTPResponseFilter = filter.SetFallbackHTTPResponseFilter
+
+	SetToolCallRequestFilter = filter.SetToolCallRequestFilter
+
+	SetToolCallResponseFilter = filter.SetToolCallResponseFilter
+
+	SetToolListResponseFilter = filter.SetToolListResponseFilter
 )
