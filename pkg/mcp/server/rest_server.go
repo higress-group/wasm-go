@@ -83,18 +83,20 @@ type RestToolResponseTemplate struct {
 
 // RestTool represents a REST API that can be called as an MCP tool
 type RestTool struct {
-	Name             string                   `json:"name"`
-	Description      string                   `json:"description"`
-	Security         SecurityRequirement      `json:"security,omitempty"` // Tool-level security for MCP Client to MCP Server
-	Args             []RestToolArg            `json:"args"`
-	RequestTemplate  RestToolRequestTemplate  `json:"requestTemplate,omitempty"`
-	ResponseTemplate RestToolResponseTemplate `json:"responseTemplate"`
+	Name                  string                   `json:"name"`
+	Description           string                   `json:"description"`
+	Security              SecurityRequirement      `json:"security,omitempty"` // Tool-level security for MCP Client to MCP Server
+	Args                  []RestToolArg            `json:"args"`
+	RequestTemplate       RestToolRequestTemplate  `json:"requestTemplate,omitempty"`
+	ResponseTemplate      RestToolResponseTemplate `json:"responseTemplate"`
+	ErrorResponseTemplate string                   `json:"errorResponseTemplate"`
 
 	// Parsed templates (not from JSON)
-	parsedURLTemplate      *template.Template
-	parsedHeaderTemplates  map[string]*template.Template
-	parsedBodyTemplate     *template.Template
-	parsedResponseTemplate *template.Template
+	parsedURLTemplate           *template.Template
+	parsedHeaderTemplates       map[string]*template.Template
+	parsedBodyTemplate          *template.Template
+	parsedResponseTemplate      *template.Template
+	parsedErrorResponseTemplate *template.Template
 
 	// Map of argument names to their positions
 	argPositions map[string]string
@@ -208,6 +210,14 @@ func (t *RestTool) parseTemplates() error {
 		}
 	} else if t.isDirectResponseTool {
 		return errors.New("direct response mode must set responseTemplate.body")
+	}
+
+	// Parse eror response template if present
+	if t.ErrorResponseTemplate != "" {
+		t.parsedErrorResponseTemplate, err = template.New("errorResponse").Funcs(templateFuncs()).Parse(t.ErrorResponseTemplate)
+		if err != nil {
+			return fmt.Errorf("error parsing error response template: %v", err)
+		}
 	}
 
 	// Initialize argument positions map
@@ -919,6 +929,24 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 		func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 
 			if statusCode >= 300 || statusCode < 200 {
+				if t.toolConfig.parsedErrorResponseTemplate != nil {
+					// Error response template is provided to customize the error response result.
+					// Based on the responseBody, access the map-structured responseHeaders through _headers to reference their values within the errorResponseTemplate.
+					// Usage examples in errorResponseTemplate:
+					// - {{gjson "_headers.\\:status"}} -> Get HTTP status code
+					// - {{gjson "_headers.x-ca-error-code"}} -> Get value of header key "x-ca-error-code"
+					// - {{.data.value}} -> Access original responseBody content (e.g., JSON field "data.value")
+					errorResponseTemplateDataBytes, _ := sjson.SetBytes(responseBody, "_headers", convertHeaders(responseHeaders))
+					errorTemplateResult, err := executeTemplate(t.toolConfig.parsedErrorResponseTemplate, errorResponseTemplateDataBytes)
+					if err != nil {
+						utils.OnMCPToolCallError(ctx, fmt.Errorf("error executing error response template: %v", err))
+						return
+					}
+					if errorTemplateResult != "" {
+						utils.OnMCPToolCallError(ctx, fmt.Errorf("%s", errorTemplateResult))
+						return
+					}
+				}
 				utils.OnMCPToolCallError(ctx, fmt.Errorf("call failed, status: %d, response: %s", statusCode, responseBody))
 				return
 			}
@@ -1020,4 +1048,16 @@ func (t *RestMCPTool) InputSchema() map[string]any {
 	}
 
 	return schema
+}
+
+func convertHeaders(responseHeaders [][2]string) map[string]string {
+    headerMap := make(map[string]string)
+    for _, h := range responseHeaders {
+        if len(h) >= 2 {
+            key := h[0]
+            value := h[1]
+            headerMap[key] = value
+        }
+    }
+    return headerMap
 }
