@@ -930,6 +930,8 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 
 			if statusCode >= 300 || statusCode < 200 {
 				if t.toolConfig.parsedErrorResponseTemplate != nil {
+					//Error response template is provided to customize the error response result.
+					//Based on the responseBody, access the map-structured responseHeaders through _headers to reference their values within the errorResponseTemplate.
 					errorResponseTemplateDataBytes, _ := sjson.SetBytes(responseBody, "_headers", convertHeaders(responseHeaders))
 					errorTemplateResult, err := executeTemplate(t.toolConfig.parsedErrorResponseTemplate, errorResponseTemplateDataBytes)
 					if err != nil {
