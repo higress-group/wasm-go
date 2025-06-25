@@ -922,8 +922,15 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 	}
 	// After applySecurity, authReqCtx.Headers and authReqCtx.ParsedURL (RawQuery) might have been modified.
 	// Update urlStr from the potentially modified ParsedURL.
-	urlStr = authReqCtx.ParsedURL.String()
-
+	u := authReqCtx.ParsedURL
+	encodedPath := u.EscapedPath()
+	urlStr = u.Scheme + "://" + u.Host + encodedPath
+	if u.RawQuery != "" {
+		urlStr += "?" + u.RawQuery
+	}
+	if u.Fragment != "" {
+		urlStr += "#" + u.Fragment
+	}
 	// Make HTTP request using potentially modified headers from authReqCtx
 	err = ctx.RouteCall(authReqCtx.Method, urlStr, authReqCtx.Headers, authReqCtx.RequestBody,
 		func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
@@ -1051,13 +1058,13 @@ func (t *RestMCPTool) InputSchema() map[string]any {
 }
 
 func convertHeaders(responseHeaders [][2]string) map[string]string {
-    headerMap := make(map[string]string)
-    for _, h := range responseHeaders {
-        if len(h) >= 2 {
-            key := h[0]
-            value := h[1]
-            headerMap[key] = value
-        }
-    }
-    return headerMap
+	headerMap := make(map[string]string)
+	for _, h := range responseHeaders {
+		if len(h) >= 2 {
+			key := h[0]
+			value := h[1]
+			headerMap[key] = value
+		}
+	}
+	return headerMap
 }
