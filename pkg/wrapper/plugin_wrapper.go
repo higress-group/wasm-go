@@ -907,9 +907,12 @@ func (ctx *CommonHttpCtx[PluginConfig]) RouteCall(method, rawURL string, headers
 	if parsedURL.Host != "" {
 		authority = parsedURL.Host
 	}
-	path := "/" + strings.TrimPrefix(parsedURL.Path, "/")
+	path := "/" + strings.TrimPrefix(parsedURL.EscapedPath(), "/")
 	if parsedURL.RawQuery != "" {
 		path = fmt.Sprintf("%s?%s", path, parsedURL.RawQuery)
+	}
+	if parsedURL.Fragment != "" {
+		path = fmt.Sprintf("%s#%s", path, parsedURL.Fragment)
 	}
 	proxywasm.ReplaceHttpRequestHeader(":path", path)
 	if authority != "" {
