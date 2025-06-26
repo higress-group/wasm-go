@@ -15,12 +15,15 @@
 package validator
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
+	"github.com/tidwall/gjson"
+	"gopkg.in/yaml.v3"
+
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/mcp/server"
-	"github.com/tidwall/gjson"
 )
 
 // validatorLogger is a simple logger implementation for validation mode
@@ -98,4 +101,29 @@ func ValidateConfig(configJSON string) (*ValidationResult, error) {
 	}
 
 	return result, nil
+}
+
+// ValidateConfigYAML validates MCP configuration from YAML format
+// This function converts YAML to JSON first, then validates using the same logic
+func ValidateConfigYAML(configYAML string) (*ValidationResult, error) {
+	// Parse YAML into a generic interface
+	var yamlData interface{}
+	if err := yaml.Unmarshal([]byte(configYAML), &yamlData); err != nil {
+		return &ValidationResult{
+			IsValid: false,
+			Error:   fmt.Errorf("failed to parse YAML: %v", err),
+		}, nil
+	}
+
+	// Convert to JSON
+	jsonBytes, err := json.Marshal(yamlData)
+	if err != nil {
+		return &ValidationResult{
+			IsValid: false,
+			Error:   fmt.Errorf("failed to convert YAML to JSON: %v", err),
+		}, nil
+	}
+
+	// Use the existing JSON validation logic
+	return ValidateConfig(string(jsonBytes))
 }

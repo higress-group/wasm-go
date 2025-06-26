@@ -172,3 +172,95 @@ func TestValidateConfig_MissingServerAndToolSet(t *testing.T) {
 		t.Errorf("Expected validation error, but got nil")
 	}
 }
+
+func TestValidateConfigYAML_RestServer(t *testing.T) {
+	// Test REST server configuration in YAML format
+	configYAML := `
+server:
+  name: test-rest-server-yaml
+  config: {}
+tools:
+  - name: test-tool-yaml
+    description: A test tool from YAML
+    args:
+      - name: input
+        description: Input parameter
+        type: string
+        required: true
+    requestTemplate:
+      url: https://api.example.com/test
+      method: POST
+    responseTemplate:
+      body: "{{.}}"
+`
+
+	result, err := ValidateConfigYAML(configYAML)
+	if err != nil {
+		t.Fatalf("ValidateConfigYAML returned error: %v", err)
+	}
+
+	if !result.IsValid {
+		t.Errorf("Expected config to be valid, but got invalid with error: %v", result.Error)
+	}
+
+	if result.ServerName != "test-rest-server-yaml" {
+		t.Errorf("Expected server name 'test-rest-server-yaml', got '%s'", result.ServerName)
+	}
+
+	if result.IsComposed {
+		t.Errorf("Expected single server (not composed), but got composed")
+	}
+}
+
+func TestValidateConfigYAML_ToolSet(t *testing.T) {
+	// Test toolSet configuration in YAML format
+	configYAML := `
+toolSet:
+  name: test-toolset-yaml
+  serverTools:
+    - serverName: server1
+      tools: ["tool1", "tool2"]
+    - serverName: server2
+      tools: ["tool3"]
+`
+
+	result, err := ValidateConfigYAML(configYAML)
+	if err != nil {
+		t.Fatalf("ValidateConfigYAML returned error: %v", err)
+	}
+
+	if !result.IsValid {
+		t.Errorf("Expected config to be valid, but got invalid with error: %v", result.Error)
+	}
+
+	if result.ServerName != "test-toolset-yaml" {
+		t.Errorf("Expected server name 'test-toolset-yaml', got '%s'", result.ServerName)
+	}
+
+	if !result.IsComposed {
+		t.Errorf("Expected composed server, but got single server")
+	}
+}
+
+func TestValidateConfigYAML_InvalidYAML(t *testing.T) {
+	// Test invalid YAML syntax
+	configYAML := `
+server:
+  name: test-server
+  config: {
+    invalid yaml syntax here
+`
+
+	result, err := ValidateConfigYAML(configYAML)
+	if err != nil {
+		t.Fatalf("ValidateConfigYAML returned error: %v", err)
+	}
+
+	if result.IsValid {
+		t.Errorf("Expected config to be invalid due to YAML syntax error, but got valid")
+	}
+
+	if result.Error == nil {
+		t.Errorf("Expected YAML parsing error, but got nil")
+	}
+}

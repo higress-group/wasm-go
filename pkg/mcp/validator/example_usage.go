@@ -174,3 +174,77 @@ func ValidateConfigFromMap(configMap map[string]interface{}) (*ValidationResult,
 	}
 	return ValidateConfig(string(configBytes))
 }
+
+// ExampleYAMLUsage demonstrates how to use the ValidateConfigYAML function
+func ExampleYAMLUsage() {
+	// Example YAML configuration for REST server
+	yamlConfig := `
+server:
+  name: weather-api-yaml
+  config:
+    apiKey: your-api-key
+tools:
+  - name: get_weather
+    description: Get current weather for a city
+    args:
+      - name: city
+        description: City name
+        type: string
+        required: true
+      - name: units
+        description: Temperature units
+        type: string
+        enum: ["celsius", "fahrenheit"]
+        default: celsius
+    requestTemplate:
+      url: "https://api.weather.com/v1/current?city={{.args.city}}&units={{.args.units}}"
+      method: GET
+      headers:
+        - key: Authorization
+          value: "Bearer {{.config.apiKey}}"
+    responseTemplate:
+      body: "Current weather in {{.args.city}}: {{.temperature}}°{{.args.units}}"
+allowTools: ["get_weather"]
+`
+
+	result, err := ValidateConfigYAML(yamlConfig)
+	if err != nil {
+		fmt.Printf("Error validating YAML config: %v\n", err)
+		return
+	}
+
+	fmt.Printf("YAML Config Validation:\n")
+	fmt.Printf("  Valid: %t\n", result.IsValid)
+	fmt.Printf("  Server Name: %s\n", result.ServerName)
+	fmt.Printf("  Is Composed: %t\n", result.IsComposed)
+	if result.Error != nil {
+		fmt.Printf("  Error: %v\n", result.Error)
+	}
+	fmt.Println()
+
+	// Example YAML configuration for ToolSet
+	yamlToolSetConfig := `
+toolSet:
+  name: ai-assistant-tools-yaml
+  serverTools:
+    - serverName: weather-api
+      tools: ["get_weather", "get_forecast"]
+    - serverName: search-api
+      tools: ["web_search", "image_search"]
+allowTools: ["weather-api/get_weather", "search-api/web_search"]
+`
+
+	result, err = ValidateConfigYAML(yamlToolSetConfig)
+	if err != nil {
+		fmt.Printf("Error validating YAML toolSet config: %v\n", err)
+		return
+	}
+
+	fmt.Printf("YAML ToolSet Config Validation:\n")
+	fmt.Printf("  Valid: %t\n", result.IsValid)
+	fmt.Printf("  Server Name: %s\n", result.ServerName)
+	fmt.Printf("  Is Composed: %t\n", result.IsComposed)
+	if result.Error != nil {
+		fmt.Printf("  Error: %v\n", result.Error)
+	}
+}

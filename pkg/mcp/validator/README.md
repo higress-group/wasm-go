@@ -17,8 +17,26 @@ This package provides a configuration validation library for MCP (Model Context 
 ```go
 import "github.com/higress-group/wasm-go/pkg/mcp/validator"
 
-// Validate a configuration JSON string
-result, err := validator.ValidateConfig(configJSON)
+// Validate a configuration YAML string
+yamlConfig := `
+server:
+  name: my-server
+  config:
+    apiKey: secret
+tools:
+  - name: my-tool
+    description: A sample tool
+    args:
+      - name: input
+        type: string
+        required: true
+    requestTemplate:
+      url: https://api.example.com/endpoint
+      method: POST
+    responseTemplate:
+      body: "{{.}}"
+`
+result, err := validator.ValidateConfigYAML(yamlConfig)
 if err != nil {
     // Handle error
     return
@@ -36,103 +54,59 @@ if result.IsValid {
 }
 ```
 
-### Validation from Different Sources
-
-```go
-// From byte array
-result, err := validator.ValidateConfigFromBytes(configBytes)
-
-// From map
-configMap := map[string]interface{}{
-    "server": map[string]interface{}{
-        "name": "my-server",
-        // ... other config
-    },
-}
-result, err := validator.ValidateConfigFromMap(configMap)
-```
-
 ## Supported Configuration Types
 
 ### 1. REST Server Configuration
 
 Validates REST-based MCP servers with tools, security schemes, and templates:
 
-```json
-{
-  "server": {
-    "name": "weather-api",
-    "config": {
-      "apiKey": "your-api-key"
-    },
-    "securitySchemes": [
-      {
-        "id": "bearer-auth",
-        "type": "http",
-        "scheme": "bearer"
-      }
-    ]
-  },
-  "tools": [
-    {
-      "name": "get_weather",
-      "description": "Get current weather",
-      "args": [
-        {
-          "name": "city",
-          "type": "string",
-          "required": true
-        }
-      ],
-      "requestTemplate": {
-        "url": "https://api.weather.com/v1/current?city={{.args.city}}",
-        "method": "GET"
-      },
-      "responseTemplate": {
-        "body": "Weather: {{.temperature}}°C"
-      }
-    }
-  ]
-}
+```yaml
+server:
+  name: weather-api
+  config:
+    apiKey: your-api-key
+  securitySchemes:
+    - id: bearer-auth
+      type: http
+      scheme: bearer
+tools:
+  - name: get_weather
+    description: Get current weather
+    args:
+      - name: city
+        type: string
+        required: true
+    requestTemplate:
+      url: "https://api.weather.com/v1/current?city={{.args.city}}"
+      method: GET
+    responseTemplate:
+      body: "Weather: {{.temperature}}°C"
 ```
 
 ### 2. ToolSet Configuration (Composed Server)
 
 Validates composed servers that aggregate tools from multiple servers:
 
-```json
-{
-  "toolSet": {
-    "name": "ai-assistant-tools",
-    "serverTools": [
-      {
-        "serverName": "weather-api",
-        "tools": ["get_weather", "get_forecast"]
-      },
-      {
-        "serverName": "search-api", 
-        "tools": ["web_search"]
-      }
-    ]
-  },
-  "allowTools": ["weather-api/get_weather", "search-api/web_search"]
-}
+```yaml
+toolSet:
+  name: ai-assistant-tools
+  serverTools:
+    - serverName: weather-api
+      tools: ["get_weather", "get_forecast"]
+    - serverName: search-api
+      tools: ["web_search"]
 ```
 
 ### 3. Pre-registered Go-based Server
 
 For pre-registered Go-based servers, validation focuses on basic structure and skips server instance validation:
 
-```json
-{
-  "server": {
-    "name": "custom-go-server",
-    "config": {
-      "database_url": "postgres://localhost:5432/mydb"
-    }
-  },
-  "allowTools": ["query_database"]
-}
+```yaml
+server:
+  name: custom-go-server
+  config:
+    database_url: "postgres://localhost:5432/mydb"
+allowTools: ["query_database"]
 ```
 
 ## Validation Result
@@ -145,30 +119,6 @@ type ValidationResult struct {
     Error      error  `json:"error"`       // Validation error if any
     ServerName string `json:"serverName"`  // Parsed server name
     IsComposed bool   `json:"isComposed"`  // Whether it's a composed server
-}
-```
-
-## Integration with Management Platforms
-
-This validator is designed to be easily integrated into management platforms:
-
-```go
-// Example API endpoint for configuration validation
-func validateConfigHandler(w http.ResponseWriter, r *http.Request) {
-    var configData map[string]interface{}
-    if err := json.NewDecoder(r.Body).Decode(&configData); err != nil {
-        http.Error(w, "Invalid JSON", http.StatusBadRequest)
-        return
-    }
-    
-    result, err := validator.ValidateConfigFromMap(configData)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusInternalServerError)
-        return
-    }
-    
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(result)
 }
 ```
 
