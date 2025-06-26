@@ -924,7 +924,11 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 	// Update urlStr from the potentially modified ParsedURL.
 	u := authReqCtx.ParsedURL
 	encodedPath := u.EscapedPath()
-	urlStr = u.Scheme + "://" + u.Host + encodedPath
+	if u.Scheme != "" && u.Host != "" {
+		urlStr = u.Scheme + "://" + u.Host + encodedPath
+	} else {
+		urlStr = "/" + strings.TrimPrefix(encodedPath, "/")
+	}
 	if u.RawQuery != "" {
 		urlStr += "?" + u.RawQuery
 	}
