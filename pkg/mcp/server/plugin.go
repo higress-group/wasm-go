@@ -61,10 +61,14 @@ type GlobalToolRegistry struct {
 	serverTools map[string]map[string]ToolInfo
 }
 
+// Initialize initializes the GlobalToolRegistry
+func (r *GlobalToolRegistry) Initialize() {
+	r.serverTools = make(map[string]map[string]ToolInfo)
+}
+
 func init() {
-	globalToolRegistry = GlobalToolRegistry{
-		serverTools: make(map[string]map[string]ToolInfo),
-	}
+	globalToolRegistry = GlobalToolRegistry{}
+	globalToolRegistry.Initialize()
 }
 
 // RegisterTool registers a tool into the global registry.
@@ -126,7 +130,14 @@ type ServerToolConfig struct {
 	Tools      []string `json:"tools"`
 }
 
-type mcpServerConfig struct {
+// ConfigDependencies contains the dependencies needed for config parsing
+type ConfigDependencies struct {
+	Servers                  map[string]Server
+	ToolRegistry             *GlobalToolRegistry
+	SkipPreRegisteredServers bool // Skip validation for pre-registered Go-based servers
+}
+
+type McpServerConfig struct {
 	serverName     string // Store the server name directly
 	server         Server // Can be a single server or a composed server
 	methodHandlers utils.MethodHandlers
@@ -134,7 +145,18 @@ type mcpServerConfig struct {
 	isComposed     bool
 }
 
-func parseConfig(configJson gjson.Result, config *mcpServerConfig) error {
+// GetServerName returns the server name for external access
+func (c *McpServerConfig) GetServerName() string {
+	return c.serverName
+}
+
+// GetIsComposed returns whether this is a composed server for external access
+func (c *McpServerConfig) GetIsComposed() bool {
+	return c.isComposed
+}
+
+// parseConfigCore contains the core config parsing logic with dependency injection
+func parseConfigCore(configJson gjson.Result, config *McpServerConfig, deps *ConfigDependencies) error {
 	toolSetJson := configJson.Get("toolSet")
 	serverJson := configJson.Get("server")                        // This is for single server or REST server definition
 	pluginServerConfigJson := configJson.Get("server.config").Raw // Config for the plugin instance itself, if any.
@@ -153,7 +175,7 @@ func parseConfig(configJson gjson.Result, config *mcpServerConfig) error {
 		config.serverName = tsConfig.Name // Use toolSet name as the server name for composed server
 		log.Infof("Parsing toolSet configuration: %s", config.serverName)
 
-		composedServer := NewComposedMCPServer(config.serverName, tsConfig.ServerTools, &globalToolRegistry)
+		composedServer := NewComposedMCPServer(config.serverName, tsConfig.ServerTools, deps.ToolRegistry)
 		// A composed server itself might have a config block, e.g. for shared settings, though not typical.
 		composedServer.SetConfig([]byte(pluginServerConfigJson))
 		config.server = composedServer
@@ -194,22 +216,28 @@ func parseConfig(configJson gjson.Result, config *mcpServerConfig) error {
 				if err := restServer.AddRestTool(restTool); err != nil {
 					return fmt.Errorf("failed to add tool %s: %v", restTool.Name, err)
 				}
-				// Register tool to global registry
-				globalToolRegistry.RegisterTool(config.serverName, restTool.Name, restServer.GetMCPTools()[restTool.Name])
+				// Register tool to registry
+				deps.ToolRegistry.RegisterTool(config.serverName, restTool.Name, restServer.GetMCPTools()[restTool.Name])
 			}
 			config.server = restServer
 		} else {
 			// Logic for pre-registered Go-based servers (non-REST)
-			if serverInstance, exist := globalContext.servers[config.serverName]; exist {
-				clonedServer := serverInstance.Clone()
-				clonedServer.SetConfig([]byte(serverConfigJsonForInstance)) // Pass the server's specific config
-				config.server = clonedServer
-				// Register tools from this server to global registry
-				for toolName, toolInstance := range clonedServer.GetMCPTools() {
-					globalToolRegistry.RegisterTool(config.serverName, toolName, toolInstance)
-				}
+			if deps.SkipPreRegisteredServers {
+				// In validation mode, skip pre-registered servers validation
+				// Just validate the basic structure without actual server instance
+				config.server = nil // Will be handled appropriately in validation context
 			} else {
-				return fmt.Errorf("mcp server type '%s' not registered in globalContext.servers", config.serverName)
+				if serverInstance, exist := deps.Servers[config.serverName]; exist {
+					clonedServer := serverInstance.Clone()
+					clonedServer.SetConfig([]byte(serverConfigJsonForInstance)) // Pass the server's specific config
+					config.server = clonedServer
+					// Register tools from this server to registry
+					for toolName, toolInstance := range clonedServer.GetMCPTools() {
+						deps.ToolRegistry.RegisterTool(config.serverName, toolName, toolInstance)
+					}
+				} else {
+					return fmt.Errorf("mcp server type '%s' not registered", config.serverName)
+				}
 			}
 		}
 	} else {
@@ -328,6 +356,22 @@ func parseConfig(configJson gjson.Result, config *mcpServerConfig) error {
 	return nil
 }
 
+// ParseConfigCore exports the core parsing logic for external use (e.g., validation)
+func ParseConfigCore(configJson gjson.Result, config *McpServerConfig, deps *ConfigDependencies) error {
+	return parseConfigCore(configJson, config, deps)
+}
+
+func parseConfig(configJson gjson.Result, config *McpServerConfig) error {
+	// Build runtime dependencies using global variables
+	deps := &ConfigDependencies{
+		Servers:      globalContext.servers,
+		ToolRegistry: &globalToolRegistry,
+	}
+
+	// Call the core parsing logic
+	return parseConfigCore(configJson, config, deps)
+}
+
 func Load(options ...CtxOption) {
 	for _, opt := range options {
 		opt.Apply(&globalContext)
@@ -341,7 +385,7 @@ func Initialize() {
 	wrapper.SetCtx(
 		"mcp-server",
 		wrapper.ParseConfig(parseConfig),
-		wrapper.WithLogger[mcpServerConfig](&utils.MCPServerLog{}),
+		wrapper.WithLogger[McpServerConfig](&utils.MCPServerLog{}),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 		wrapper.ProcessRequestBody(onHttpRequestBody),
 	)
@@ -395,7 +439,7 @@ func StoreServerState(ctx wrapper.HttpContext, config any) {
 	proxywasm.SetProperty([]string{"mcp_server_config"}, configBytes)
 }
 
-func onHttpRequestHeaders(ctx wrapper.HttpContext, config mcpServerConfig) types.Action {
+func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types.Action {
 	ctx.DisableReroute()
 	ctx.SetRequestBodyBufferLimit(defaultMaxBodyBytes)
 	ctx.SetResponseBodyBufferLimit(defaultMaxBodyBytes)
@@ -411,6 +455,6 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config mcpServerConfig) types
 	return types.HeaderStopIteration
 }
 
-func onHttpRequestBody(ctx wrapper.HttpContext, config mcpServerConfig, body []byte) types.Action {
+func onHttpRequestBody(ctx wrapper.HttpContext, config McpServerConfig, body []byte) types.Action {
 	return utils.HandleJsonRpcMethod(ctx, body, config.methodHandlers)
 }
