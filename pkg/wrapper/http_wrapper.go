@@ -38,6 +38,7 @@ type HttpClient interface {
 	Connect(rawURL string, headers [][2]string, body []byte, cb ResponseCallback, timeoutMillisecond ...uint32) error
 	Trace(rawURL string, headers [][2]string, body []byte, cb ResponseCallback, timeoutMillisecond ...uint32) error
 	Call(method, rawURL string, headers [][2]string, body []byte, cb ResponseCallback, timeoutMillisecond ...uint32) error
+	ClusterName() string
 }
 
 type ClusterClient[C Cluster] struct {
@@ -78,6 +79,10 @@ func (c ClusterClient[C]) Trace(rawURL string, headers [][2]string, body []byte,
 
 func (c ClusterClient[C]) Call(method, rawURL string, headers [][2]string, body []byte, cb ResponseCallback, timeoutMillisecond ...uint32) error {
 	return HttpCall(c.cluster, method, rawURL, headers, body, cb, timeoutMillisecond...)
+}
+
+func (c ClusterClient[C]) ClusterName() string {
+	return c.cluster.ClusterName()
 }
 
 func HttpCall(cluster Cluster, method, rawURL string, headers [][2]string, body []byte,
