@@ -32,7 +32,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-type Log log.Log
+type Log = log.Log
 
 const (
 	CustomLogKey       = "custom_log"
