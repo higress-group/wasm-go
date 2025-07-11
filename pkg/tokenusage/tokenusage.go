@@ -3,7 +3,7 @@ package tokenusage
 import (
 	"bytes"
 
-	"github.com/alibaba/higress/plugins/wasm-go/pkg/wrapper"
+	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 type TokenUsage struct {
@@ -14,8 +14,8 @@ type TokenUsage struct {
 }
 
 func GetTokenUsage(data []byte) (u TokenUsage) {
-	chunks := bytes.Split(bytes.TrimSpace(wrapper.UnifySSEChunk(data)), []byte("\n\n"))
-	for _, chunk := range chunks {
+	chunks := bytes.SplitSeq(bytes.TrimSpace(wrapper.UnifySSEChunk(data)), []byte("\n\n"))
+	for chunk := range chunks {
 		// the feature strings are used to identify the usage data, like:
 		// {"model":"gpt2","usage":{"prompt_tokens":1,"completion_tokens":1}}
 
