@@ -34,3 +34,8 @@ func MarshalStr(raw string) string {
 		return ""
 	}
 }
+
+func GetPluginFingerPrint() string {
+	pluginName, _ := proxywasm.GetProperty([]string{"plugin_name"})
+	return string(pluginName)
+}

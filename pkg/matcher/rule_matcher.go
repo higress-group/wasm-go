@@ -22,6 +22,9 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/tidwall/gjson"
+
+	"github.com/higress-group/wasm-go/pkg/iface"
+	"github.com/higress-group/wasm-go/pkg/log"
 )
 
 type Category int
@@ -31,6 +34,7 @@ const (
 	Host
 	Service
 	RoutePrefix
+	RouteAndService
 )
 
 type MatchType int
@@ -61,6 +65,52 @@ type RuleConfig[PluginConfig any] struct {
 	routePrefixs map[string]struct{}
 	hosts        []HostMatcher
 	config       PluginConfig
+}
+
+// GenerateHashKey generates a hash key for the rule config based on matching conditions
+func (r *RuleConfig[PluginConfig]) GenerateHashKey() string {
+	var keyParts []string
+
+	// Add category
+	keyParts = append(keyParts, fmt.Sprintf("cat:%d", r.category))
+
+	// Add routes
+	if len(r.routes) > 0 {
+		var routes []string
+		for route := range r.routes {
+			routes = append(routes, route)
+		}
+		keyParts = append(keyParts, fmt.Sprintf("routes:%s", strings.Join(routes, ",")))
+	}
+
+	// Add services
+	if len(r.services) > 0 {
+		var services []string
+		for service := range r.services {
+			services = append(services, service)
+		}
+		keyParts = append(keyParts, fmt.Sprintf("services:%s", strings.Join(services, ",")))
+	}
+
+	// Add route prefixes
+	if len(r.routePrefixs) > 0 {
+		var prefixes []string
+		for prefix := range r.routePrefixs {
+			prefixes = append(prefixes, prefix)
+		}
+		keyParts = append(keyParts, fmt.Sprintf("prefixes:%s", strings.Join(prefixes, ",")))
+	}
+
+	// Add hosts
+	if len(r.hosts) > 0 {
+		var hosts []string
+		for _, hostMatcher := range r.hosts {
+			hosts = append(hosts, fmt.Sprintf("%d:%s", hostMatcher.matchType, hostMatcher.host))
+		}
+		keyParts = append(keyParts, fmt.Sprintf("hosts:%s", strings.Join(hosts, ",")))
+	}
+
+	return strings.Join(keyParts, "|")
 }
 
 type RuleMatcher[PluginConfig any] struct {
@@ -95,6 +145,20 @@ func (m RuleMatcher[PluginConfig]) GetMatchConfig() (*PluginConfig, error) {
 				return &rule.config, nil
 			}
 		}
+		// category == Service
+		if rule.category == Service {
+			if m.serviceMatch(rule, string(serviceName)) {
+				return &rule.config, nil
+			}
+		}
+		// category == RouteAndService
+		if rule.category == RouteAndService {
+			if _, ok := rule.routes[string(routeName)]; ok {
+				if m.serviceMatch(rule, string(serviceName)) {
+					return &rule.config, nil
+				}
+			}
+		}
 		// category == RoutePrefix
 		if rule.category == RoutePrefix {
 			for routePrefix := range rule.routePrefixs {
@@ -103,10 +167,6 @@ func (m RuleMatcher[PluginConfig]) GetMatchConfig() (*PluginConfig, error) {
 				}
 			}
 		}
-		// category == Cluster
-		if m.serviceMatch(rule, string(serviceName)) {
-			return &rule.config, nil
-		}
 	}
 	if m.hasGlobalConfig {
 		return &m.globalConfig, nil
@@ -114,7 +174,7 @@ func (m RuleMatcher[PluginConfig]) GetMatchConfig() (*PluginConfig, error) {
 	return nil, nil
 }
 
-func (m *RuleMatcher[PluginConfig]) ParseRuleConfig(config gjson.Result,
+func (m *RuleMatcher[PluginConfig]) ParseRuleConfig(context iface.PluginContext, config gjson.Result,
 	parsePluginConfig func(gjson.Result, *PluginConfig) error,
 	parseOverrideConfig func(gjson.Result, PluginConfig, *PluginConfig) error) error {
 	var rules []gjson.Result
@@ -146,40 +206,98 @@ func (m *RuleMatcher[PluginConfig]) ParseRuleConfig(config gjson.Result,
 		}
 		return fmt.Errorf("parse config failed, no valid rules; global config parse error:%v", globalConfigError)
 	}
+	// Check if rule level config isolation is enabled
+	isRuleLevelIsolation := context.IsRuleLevelConfigIsolation()
+
+	var successfulRules []RuleConfig[PluginConfig]
+	var hasAnyRuleParseError bool
+
 	for _, ruleJson := range rules {
 		var (
 			rule RuleConfig[PluginConfig]
 			err  error
 		)
+		rule.routes = m.parseRouteMatchConfig(ruleJson)
+		rule.hosts = m.parseHostMatchConfig(ruleJson)
+		rule.services = m.parseServiceMatchConfig(ruleJson)
+		rule.routePrefixs = m.parseRoutePrefixMatchConfig(ruleJson)
+		hasRoute := len(rule.routes) != 0
+		hasHosts := len(rule.hosts) != 0
+		hasService := len(rule.services) != 0
+		hasRoutePrefix := len(rule.routePrefixs) != 0
+		if boolToInt(hasRoute)+boolToInt(hasService)+boolToInt(hasHosts)+boolToInt(hasRoutePrefix) == 0 {
+			return errors.New("there is at least one of  '_match_route_', '_match_domain_', '_match_service_' and '_match_route_prefix_' can present in configuration.")
+		}
+		if hasRoute {
+			rule.category = Route
+			if hasService {
+				rule.category = RouteAndService
+			}
+		} else if hasHosts {
+			rule.category = Host
+		} else if hasService {
+			rule.category = Service
+		} else {
+			rule.category = RoutePrefix
+		}
+
+		// Try to parse the rule config
 		if parseOverrideConfig != nil {
 			err = parseOverrideConfig(ruleJson, m.globalConfig, &rule.config)
 		} else {
 			err = parsePluginConfig(ruleJson, &rule.config)
 		}
+
 		if err != nil {
-			return err
+			hasAnyRuleParseError = true
+			if isRuleLevelIsolation {
+				log.Warnf("parse rule config failed for rule %s: %v, trying to load from backup", ruleJson.Raw, err)
+				// Try to load from backup
+				if loadedRuleJson := m.loadRuleJsonFromBackup(context, rule); loadedRuleJson.Exists() {
+					log.Infof("found backup rule config: %s", loadedRuleJson.Raw)
+					// Try to parse the rule config from loaded JSON
+					if parseOverrideConfig != nil {
+						err = parseOverrideConfig(loadedRuleJson, m.globalConfig, &rule.config)
+					} else {
+						err = parsePluginConfig(loadedRuleJson, &rule.config)
+					}
+					if err == nil {
+						successfulRules = append(successfulRules, rule)
+						log.Infof("successfully loaded rule from backup: %s", ruleJson.Raw)
+						continue
+					} else {
+						log.Errorf("failed to parse backup rule config: %v", err)
+					}
+				} else {
+					log.Infof("no backup found for rule: %s", ruleJson.Raw)
+				}
+				log.Errorf("failed to load rule from backup, skipping rule: %s", ruleJson.Raw)
+				continue
+			} else {
+				return err
+			}
 		}
-		rule.routes = m.parseRouteMatchConfig(ruleJson)
-		rule.hosts = m.parseHostMatchConfig(ruleJson)
-		rule.services = m.parseServiceMatchConfig(ruleJson)
-		rule.routePrefixs = m.parseRoutePrefixMatchConfig(ruleJson)
-		noRoute := len(rule.routes) == 0
-		noHosts := len(rule.hosts) == 0
-		noService := len(rule.services) == 0
-		noRoutePrefix := len(rule.routePrefixs) == 0
-		if boolToInt(noRoute)+boolToInt(noService)+boolToInt(noHosts)+boolToInt(noRoutePrefix) != 3 {
-			return errors.New("there is only one of  '_match_route_', '_match_domain_', '_match_service_' and '_match_route_prefix_' can present in configuration.")
+
+		// Store successful rule to backup if rule level isolation is enabled
+		if isRuleLevelIsolation {
+			log.Debugf("storing rule to backup: %s", ruleJson.Raw)
+			if storeErr := m.storeRuleToBackup(context, ruleJson, rule); storeErr != nil {
+				log.Errorf("failed to store rule to backup: %v, rule: %s", storeErr, ruleJson.Raw)
+			} else {
+				log.Debugf("successfully stored rule to backup: %s", ruleJson.Raw)
+			}
 		}
-		if !noRoute {
-			rule.category = Route
-		} else if !noHosts {
-			rule.category = Host
-		} else if !noService {
-			rule.category = Service
-		} else {
-			rule.category = RoutePrefix
-		}
-		m.ruleConfig = append(m.ruleConfig, rule)
+
+		successfulRules = append(successfulRules, rule)
+	}
+
+	m.ruleConfig = successfulRules
+
+	// If no successful rules and rule level isolation is enabled, return error
+	if isRuleLevelIsolation && len(successfulRules) == 0 && hasAnyRuleParseError {
+		return fmt.Errorf("all rules failed to parse and no previous successful config available")
+	} else if !isRuleLevelIsolation && len(successfulRules) == 0 {
+		return fmt.Errorf("no valid rules parsed")
 	}
 	return nil
 }
@@ -297,4 +415,28 @@ func (m RuleMatcher[PluginConfig]) serviceMatch(rule RuleConfig[PluginConfig], s
 		}
 	}
 	return false
+}
+
+var gRuleBackupStore map[string]string
+
+func init() {
+	gRuleBackupStore = make(map[string]string)
+}
+
+// storeRuleToSharedMemory stores a successful rule configuration to backup store
+func (m *RuleMatcher[PluginConfig]) storeRuleToBackup(context iface.PluginContext, ruleJson gjson.Result, rule RuleConfig[PluginConfig]) error {
+	hashKey := rule.GenerateHashKey()
+	gRuleBackupStore[hashKey] = ruleJson.Raw
+	return nil
+}
+
+// loadRuleJsonFromSharedMemory loads a rule JSON from backup store
+func (m *RuleMatcher[PluginConfig]) loadRuleJsonFromBackup(context iface.PluginContext, rule RuleConfig[PluginConfig]) gjson.Result {
+	hashKey := rule.GenerateHashKey()
+	data, ok := gRuleBackupStore[hashKey]
+	if !ok || data == "" {
+		return gjson.Result{}
+	}
+
+	return gjson.Parse(data)
 }

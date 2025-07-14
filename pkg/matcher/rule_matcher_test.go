@@ -27,6 +27,23 @@ type customConfig struct {
 	age  int64
 }
 
+type mockPluginContext struct {
+	ruleLevelIsolation bool
+}
+
+func (c *mockPluginContext) SetContext(key string, value interface{}) {}
+
+func (c *mockPluginContext) GetContext(key string) interface{} { return nil }
+
+func (c *mockPluginContext) EnableRuleLevelConfigIsolation() { c.ruleLevelIsolation = true }
+
+func (c *mockPluginContext) IsRuleLevelConfigIsolation() bool { return c.ruleLevelIsolation }
+
+func (c *mockPluginContext) GetFingerPrint() string { return "" }
+
+func (c *mockPluginContext) DoLeaderElection() {}
+func (c *mockPluginContext) IsLeader() bool    { return true }
+
 func parseConfig(json gjson.Result, config *customConfig) error {
 	config.name = json.Get("name").String()
 	config.age = json.Get("age").Int()
@@ -309,24 +326,15 @@ func TestParseRuleConfig(t *testing.T) {
 		},
 		{
 			name:   "invalid rule",
-			config: `{"_rules_":[{"_match_domain_":["*"],"_match_route_":["test"]}]}`,
-			errMsg: "there is only one of  '_match_route_', '_match_domain_', '_match_service_' and '_match_route_prefix_' can present in configuration.",
-		},
-		{
-			name:   "invalid rule",
-			config: `{"_rules_":[{"_match_domain_":["*"],"_match_service_":["test.dns"]}]}`,
-			errMsg: "there is only one of  '_match_route_', '_match_domain_', '_match_service_' and '_match_route_prefix_' can present in configuration.",
-		},
-		{
-			name:   "invalid rule",
 			config: `{"_rules_":[{"age":16}]}`,
-			errMsg: "there is only one of  '_match_route_', '_match_domain_', '_match_service_' and '_match_route_prefix_' can present in configuration.",
+			errMsg: "there is at least one of  '_match_route_', '_match_domain_', '_match_service_' and '_match_route_prefix_' can present in configuration.",
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var actual RuleMatcher[customConfig]
-			err := actual.ParseRuleConfig(gjson.Parse(c.config), parseConfig, nil)
+			var ctx mockPluginContext
+			err := actual.ParseRuleConfig(&ctx, gjson.Parse(c.config), parseConfig, nil)
 			if err != nil {
 				if c.errMsg == "" {
 					t.Errorf("parse failed: %v", err)
@@ -422,7 +430,8 @@ func TestParseOverrideConfig(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var actual RuleMatcher[completeConfig]
-			err := actual.ParseRuleConfig(gjson.Parse(c.config), parseGlobalConfig, parseOverrideRuleConfig)
+			var ctx mockPluginContext
+			err := actual.ParseRuleConfig(&ctx, gjson.Parse(c.config), parseGlobalConfig, parseOverrideRuleConfig)
 			if err != nil {
 				if c.errMsg == "" {
 					t.Errorf("parse failed: %v", err)
