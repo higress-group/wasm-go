@@ -18,6 +18,14 @@ type RouteResponseCallback func(statusCode int, responseHeaders [][2]string, res
 
 type HTTPExecutionPhase int
 
+const (
+	DecodeHeader HTTPExecutionPhase = iota
+	DecodeData
+	EncodeHeader
+	EncodeData
+	Done
+)
+
 type PluginContext interface {
 	SetContext(key string, value interface{})
 	GetContext(key string) interface{}

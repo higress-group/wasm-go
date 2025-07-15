@@ -641,18 +641,6 @@ func (ctx *CommonPluginCtx[PluginConfig]) NewHttpContext(contextID uint32) types
 	return httpCtx
 }
 
-type RouteResponseCallback iface.RouteResponseCallback
-
-type HTTPExecutionPhase iface.HTTPExecutionPhase
-
-const (
-	DecodeHeader HTTPExecutionPhase = iota
-	DecodeData
-	EncodeHeader
-	EncodeData
-	Done
-)
-
 type CommonHttpCtx[PluginConfig any] struct {
 	types.DefaultHttpContext
 	plugin                *CommonPluginCtx[PluginConfig]
@@ -666,11 +654,11 @@ type CommonHttpCtx[PluginConfig any] struct {
 	contextID             uint32
 	userContext           map[string]interface{}
 	userAttribute         map[string]interface{}
-	responseCallback      RouteResponseCallback
-	executionPhase        HTTPExecutionPhase
+	responseCallback      iface.RouteResponseCallback
+	executionPhase        iface.HTTPExecutionPhase
 }
 
-func (ctx *CommonHttpCtx[PluginConfig]) GetExecutionPhase() HTTPExecutionPhase {
+func (ctx *CommonHttpCtx[PluginConfig]) GetExecutionPhase() iface.HTTPExecutionPhase {
 	return ctx.executionPhase
 }
 
@@ -827,7 +815,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) SetResponseBodyBufferLimit(size uint32) 
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, endOfStream bool) types.Action {
 	defer recoverFunc()
-	ctx.executionPhase = DecodeHeader
+	ctx.executionPhase = iface.DecodeHeader
 	requestID, _ := proxywasm.GetHttpRequestHeader("x-request-id")
 	_ = proxywasm.SetProperty([]string{"x_request_id"}, []byte(requestID))
 	config, err := ctx.plugin.GetMatchConfig()
@@ -843,6 +831,10 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 	if IsBinaryRequestBody() {
 		ctx.needRequestBody = false
 	}
+	if IsWebsocket() {
+		ctx.needRequestBody = false
+		ctx.needResponseBody = false
+	}
 	if ctx.plugin.vm.onHttpRequestHeaders == nil {
 		return types.ActionContinue
 	}
@@ -851,7 +843,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStream bool) types.Action {
 	defer recoverFunc()
-	ctx.executionPhase = DecodeData
+	ctx.executionPhase = iface.DecodeData
 	if ctx.config == nil {
 		return types.ActionContinue
 	}
@@ -885,7 +877,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseHeaders(numHeaders int, endOfStream bool) types.Action {
 	defer recoverFunc()
-	ctx.executionPhase = EncodeHeader
+	ctx.executionPhase = iface.EncodeHeader
 	if ctx.config == nil {
 		return types.ActionContinue
 	}
@@ -915,7 +907,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseHeaders(numHeaders int, en
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfStream bool) types.Action {
 	defer recoverFunc()
-	ctx.executionPhase = EncodeData
+	ctx.executionPhase = iface.EncodeData
 	if ctx.config == nil {
 		return types.ActionContinue
 	}
@@ -966,7 +958,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfSt
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpStreamDone() {
-	ctx.executionPhase = Done
+	ctx.executionPhase = iface.Done
 	defer recoverFunc()
 	if ctx.config == nil {
 		return
@@ -978,7 +970,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpStreamDone() {
 }
 
 // This RouteCall must only be invoked during the request body phase, and it requires that stopIteration has been returned during the request header phase.
-func (ctx *CommonHttpCtx[PluginConfig]) RouteCall(method, rawURL string, headers [][2]string, body []byte, callback RouteResponseCallback) error {
+func (ctx *CommonHttpCtx[PluginConfig]) RouteCall(method, rawURL string, headers [][2]string, body []byte, callback iface.RouteResponseCallback) error {
 	proxywasm.RemoveHttpRequestHeader("Accept-Encoding")
 	proxywasm.RemoveHttpRequestHeader("Content-Length")
 	requestID := uuid.New().String()
