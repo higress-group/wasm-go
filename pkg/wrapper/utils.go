@@ -36,6 +36,11 @@ func MarshalStr(raw string) string {
 	}
 }
 
+func GetPluginFingerPrint() string {
+	pluginName, _ := proxywasm.GetProperty([]string{"plugin_name"})
+	return string(pluginName)
+}
+
 func GetValueFromBody(data []byte, paths []string) *gjson.Result {
 	for _, path := range paths {
 		obj := gjson.GetBytes(data, path)
