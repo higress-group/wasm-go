@@ -17,6 +17,7 @@ package matcher
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -74,39 +75,43 @@ func (r *RuleConfig[PluginConfig]) GenerateHashKey() string {
 	// Add category
 	keyParts = append(keyParts, fmt.Sprintf("cat:%d", r.category))
 
-	// Add routes
+	// Add routes (sorted for stability)
 	if len(r.routes) > 0 {
 		var routes []string
 		for route := range r.routes {
 			routes = append(routes, route)
 		}
+		sort.Strings(routes)
 		keyParts = append(keyParts, fmt.Sprintf("routes:%s", strings.Join(routes, ",")))
 	}
 
-	// Add services
+	// Add services (sorted for stability)
 	if len(r.services) > 0 {
 		var services []string
 		for service := range r.services {
 			services = append(services, service)
 		}
+		sort.Strings(services)
 		keyParts = append(keyParts, fmt.Sprintf("services:%s", strings.Join(services, ",")))
 	}
 
-	// Add route prefixes
+	// Add route prefixes (sorted for stability)
 	if len(r.routePrefixs) > 0 {
 		var prefixes []string
 		for prefix := range r.routePrefixs {
 			prefixes = append(prefixes, prefix)
 		}
+		sort.Strings(prefixes)
 		keyParts = append(keyParts, fmt.Sprintf("prefixes:%s", strings.Join(prefixes, ",")))
 	}
 
-	// Add hosts
+	// Add hosts (already in slice order, but sort for consistency)
 	if len(r.hosts) > 0 {
 		var hosts []string
 		for _, hostMatcher := range r.hosts {
 			hosts = append(hosts, fmt.Sprintf("%d:%s", hostMatcher.matchType, hostMatcher.host))
 		}
+		sort.Strings(hosts)
 		keyParts = append(keyParts, fmt.Sprintf("hosts:%s", strings.Join(hosts, ",")))
 	}
 
