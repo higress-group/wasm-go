@@ -1,6 +1,7 @@
 package wrapper
 
 import (
+	"bytes"
 	"encoding/json"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -38,4 +39,20 @@ func MarshalStr(raw string) string {
 func GetPluginFingerPrint() string {
 	pluginName, _ := proxywasm.GetProperty([]string{"plugin_name"})
 	return string(pluginName)
+}
+
+func GetValueFromBody(data []byte, paths []string) *gjson.Result {
+	for _, path := range paths {
+		obj := gjson.GetBytes(data, path)
+		if obj.Exists() {
+			return &obj
+		}
+	}
+	return nil
+}
+
+func UnifySSEChunk(data []byte) []byte {
+	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	data = bytes.ReplaceAll(data, []byte("\r"), []byte("\n"))
+	return data
 }
