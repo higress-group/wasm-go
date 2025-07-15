@@ -57,9 +57,11 @@ type oldOnHttpStreamDoneFunc[PluginConfig any] func(context HttpContext, config 
 
 type ParseConfigWithContextFunc[PluginConfig any] func(context PluginContext, json gjson.Result, config *PluginConfig) error
 type ParseConfigFunc[PluginConfig any] func(json gjson.Result, config *PluginConfig) error
-type ParseRawConfigFunc[PluginConfig any] func(context PluginContext, configBytes []byte, config *PluginConfig) error
+type ParseRawConfigFunc[PluginConfig any] func(configBytes []byte, config *PluginConfig) error
+type ParseRawConfigWithContextFunc[PluginConfig any] func(context PluginContext, configBytes []byte, config *PluginConfig) error
 type ParseRuleConfigFunc[PluginConfig any] func(json gjson.Result, global PluginConfig, config *PluginConfig) error
-type ParseRawRuleConfigFunc[PluginConfig any] func(context PluginContext, configBytes []byte, global PluginConfig, config *PluginConfig) error
+type ParseRawRuleConfigFunc[PluginConfig any] func(configBytes []byte, global PluginConfig, config *PluginConfig) error
+type ParseRawRuleConfigWithContextFunc[PluginConfig any] func(context PluginContext, configBytes []byte, global PluginConfig, config *PluginConfig) error
 type onHttpHeadersFunc[PluginConfig any] func(context HttpContext, config PluginConfig) types.Action
 type onHttpBodyFunc[PluginConfig any] func(context HttpContext, config PluginConfig, body []byte) types.Action
 type onHttpStreamingBodyFunc[PluginConfig any] func(context HttpContext, config PluginConfig, chunk []byte, isLastChunk bool) []byte
@@ -74,8 +76,8 @@ type CommonVmCtx[PluginConfig any] struct {
 	hasCustomConfig             bool
 	vmID                        string
 	prePluginStartOrReload      onPluginStartOrReload
-	parseConfig                 ParseRawConfigFunc[PluginConfig]
-	parseRuleConfig             ParseRawRuleConfigFunc[PluginConfig]
+	parseConfig                 ParseRawConfigWithContextFunc[PluginConfig]
+	parseRuleConfig             ParseRawRuleConfigWithContextFunc[PluginConfig]
 	onHttpRequestHeaders        onHttpHeadersFunc[PluginConfig]
 	onHttpRequestBody           onHttpBodyFunc[PluginConfig]
 	onHttpStreamingRequestBody  onHttpStreamingBodyFunc[PluginConfig]
@@ -129,7 +131,9 @@ type parseConfigOption[PluginConfig any] struct {
 
 func (o parseConfigOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
 	if o.rawF != nil {
-		ctx.parseConfig = o.rawF
+		ctx.parseConfig = func(context PluginContext, configBytes []byte, config *PluginConfig) error {
+			return o.rawF(configBytes, config)
+		}
 	} else if o.f != nil {
 		ctx.parseConfig = func(context PluginContext, configBytes []byte, config *PluginConfig) error {
 			return o.f(gjson.ParseBytes(configBytes), config)
@@ -173,8 +177,12 @@ type parseOverrideConfigOption[PluginConfig any] struct {
 
 func (o *parseOverrideConfigOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
 	if o.parseRawConfigF != nil && o.parseRawRuleConfigF != nil {
-		ctx.parseConfig = o.parseRawConfigF
-		ctx.parseRuleConfig = o.parseRawRuleConfigF
+		ctx.parseConfig = func(context PluginContext, configBytes []byte, config *PluginConfig) error {
+			return o.parseRawConfigF(configBytes, config)
+		}
+		ctx.parseRuleConfig = func(context PluginContext, configBytes []byte, global PluginConfig, config *PluginConfig) error {
+			return o.parseRawRuleConfigF(configBytes, global, config)
+		}
 	} else if o.parseConfigF != nil && o.parseRuleConfigF != nil {
 		ctx.parseConfig = func(context PluginContext, configBytes []byte, config *PluginConfig) error {
 			return o.parseConfigF(gjson.ParseBytes(configBytes), config)
