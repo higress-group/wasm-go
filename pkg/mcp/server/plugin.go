@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
@@ -293,13 +294,27 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		var listedTools []map[string]any
 		// GetMCPTools() will return appropriately formatted tools for both single and composed servers
 		allTools := config.server.GetMCPTools() // For composed, keys are "serverName/toolName"
-
+		allowToolsHeaderStr, _ := proxywasm.GetHttpRequestHeader("x-higress-allow-mcp-tools")
+		proxywasm.RemoveHttpRequestHeader("x-higress-allow-mcp-tools")
+		allowToolsFromHeader := make(map[string]struct{})
+		for _, tool := range strings.Split(allowToolsHeaderStr, ",") {
+			trimmedTool := strings.TrimSpace(tool)
+			if trimmedTool == "" {
+				continue
+			}
+			allowToolsFromHeader[trimmedTool] = struct{}{}
+		}
 		for toolFullName, tool := range allTools {
 			// For composed server, toolFullName is "originalServerName/originalToolName"
 			// For single server, toolFullName is "originalToolName"
 			// The allowTools map should use the same format as toolFullName
 			if len(allowTools) != 0 {
 				if _, allow := allowTools[toolFullName]; !allow {
+					continue
+				}
+			}
+			if len(allowToolsFromHeader) != 0 {
+				if _, allow := allowToolsFromHeader[toolFullName]; !allow {
 					continue
 				}
 			}
