@@ -298,7 +298,11 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		proxywasm.RemoveHttpRequestHeader("x-higress-allow-mcp-tools")
 		allowToolsFromHeader := make(map[string]struct{})
 		for _, tool := range strings.Split(allowToolsHeaderStr, ",") {
-			allowToolsFromHeader[tool] = struct{}{}
+			trimmedTool := strings.TrimSpace(tool)
+			if trimmedTool == "" {
+				continue
+			}
+			allowToolsFromHeader[trimmedTool] = struct{}{}
 		}
 		for toolFullName, tool := range allTools {
 			// For composed server, toolFullName is "originalServerName/originalToolName"
