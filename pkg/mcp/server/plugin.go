@@ -294,10 +294,10 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		var listedTools []map[string]any
 		// GetMCPTools() will return appropriately formatted tools for both single and composed servers
 		allTools := config.server.GetMCPTools() // For composed, keys are "serverName/toolName"
-		allowToolsHeaderStr, _ := proxywasm.GetHttpRequestHeader("x-higress-allow-mcp-tools")
-		proxywasm.RemoveHttpRequestHeader("x-higress-allow-mcp-tools")
+		allowToolsHeaderStr, _ := proxywasm.GetHttpRequestHeader("x-envoy-allow-mcp-tools")
+		proxywasm.RemoveHttpRequestHeader("x-envoy-allow-mcp-tools")
 		allowToolsFromHeader := make(map[string]struct{})
-		for _, tool := range strings.Split(allowToolsHeaderStr, ",") {
+		for tool := range strings.SplitSeq(allowToolsHeaderStr, ",") {
 			trimmedTool := strings.TrimSpace(tool)
 			if trimmedTool == "" {
 				continue
