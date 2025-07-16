@@ -429,7 +429,7 @@ func init() {
 func (m *RuleMatcher[PluginConfig]) storeRuleToBackup(context iface.PluginContext, ruleJson gjson.Result, rule RuleConfig[PluginConfig]) error {
 	hashKey := rule.GenerateHashKey()
 	gRuleBackupStore[hashKey] = ruleJson.Raw
-	log.Debugf("store rule to backup, key[%s]", hashKey)
+	log.Infof("store rule to backup, key[%s]", hashKey)
 	return nil
 }
 
@@ -438,9 +438,9 @@ func (m *RuleMatcher[PluginConfig]) loadRuleJsonFromBackup(context iface.PluginC
 	hashKey := rule.GenerateHashKey()
 	data, ok := gRuleBackupStore[hashKey]
 	if !ok || data == "" {
-		log.Debugf("load rule from backup failed, key[%s]", hashKey)
+		log.Infof("load rule from backup failed, key[%s]", hashKey)
 		return gjson.Result{}
 	}
-	log.Debugf("load rule from backup success, key[%s]", hashKey)
+	log.Infof("load rule from backup success, key[%s]", hashKey)
 	return gjson.Parse(data)
 }
