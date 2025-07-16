@@ -270,11 +270,8 @@ func (m *RuleMatcher[PluginConfig]) ParseRuleConfig(context iface.PluginContext,
 						successfulRules = append(successfulRules, rule)
 						log.Infof("successfully loaded rule from backup: %s", ruleJson.Raw)
 						continue
-					} else {
-						log.Errorf("failed to parse backup rule config: %v", err)
 					}
-				} else {
-					log.Infof("no backup found for rule: %s", ruleJson.Raw)
+					log.Errorf("failed to parse backup rule config: %v", err)
 				}
 				log.Errorf("failed to load rule from backup, skipping rule: %s", ruleJson.Raw)
 				continue
@@ -432,6 +429,7 @@ func init() {
 func (m *RuleMatcher[PluginConfig]) storeRuleToBackup(context iface.PluginContext, ruleJson gjson.Result, rule RuleConfig[PluginConfig]) error {
 	hashKey := rule.GenerateHashKey()
 	gRuleBackupStore[hashKey] = ruleJson.Raw
+	log.Debugf("store rule to backup, key[%s]", hashKey)
 	return nil
 }
 
@@ -440,8 +438,9 @@ func (m *RuleMatcher[PluginConfig]) loadRuleJsonFromBackup(context iface.PluginC
 	hashKey := rule.GenerateHashKey()
 	data, ok := gRuleBackupStore[hashKey]
 	if !ok || data == "" {
+		log.Debugf("load rule from backup failed, key[%s]", hashKey)
 		return gjson.Result{}
 	}
-
+	log.Debugf("load rule from backup success, key[%s]", hashKey)
 	return gjson.Parse(data)
 }
