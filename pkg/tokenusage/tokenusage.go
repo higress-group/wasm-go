@@ -125,7 +125,7 @@ func GetTokenUsage(ctx wrapper.HttpContext, data []byte) TokenUsage {
 			u.OutputTokenDetails["thoughtsTokenCount"] = geminiThoughtsTokenCount.Int()
 		}
 		// Doubao Image Generate
-		if doubaoGeneratedImages := wrapper.GetValueFromBody(data, []string{"usageMetadata.generated_images"}); doubaoGeneratedImages != nil {
+		if doubaoGeneratedImages := wrapper.GetValueFromBody(data, []string{"usage.generated_images"}); doubaoGeneratedImages != nil {
 			u.OutputTokenDetails["generated_images"] = doubaoGeneratedImages.Int()
 		}
 		ctx.SetUserAttribute(CtxKeyOutputTokenDetails, u.OutputTokenDetails)
