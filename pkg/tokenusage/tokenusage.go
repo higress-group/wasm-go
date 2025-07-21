@@ -15,6 +15,62 @@ const (
 	CtxKeyTotalToken         = "total_token"
 	CtxKeyModel              = "model"
 	CtxKeyRequestModel       = "request_model"
+	CtxKeyChatId             = "chat_id"
+
+	ModelEmpty   = ""
+	ModelUnknown = "unknown"
+
+	ChatIdPathOpenAIChatCompletions = "id"
+	ChatIdPathOpenAIResponses       = "response.id"
+	ChatIdPathGemini                = "responseId"
+	ChatIdPathAnthropicMessages     = "message.id"
+
+	ModelPathOpenAIChatCompletions = "model"
+	ModelPathOpenAIResponses       = "response.model"
+	ModelPathAnthropicMessages     = "message.model"
+	ModelPathGeminiGenerateContent = "modelVersion"
+
+	UsageInputTokensPathOpenAIChatCompletions = "usage.prompt_tokens"
+	UsageInputTokensPathOpenAIImages          = "usage.input_tokens"
+	UsageInputTokensPathOpenAIResponses       = "response.usage.input_tokens"
+	UsageInputTokensPathGemini                = "usageMetadata.promptTokenCount"
+	UsageInputTokensPathAnthropicMessages     = "message.usage.input_tokens"
+
+	UsageCacheCreationInputTokensPathAnthropicMessages = "usage.cache_creation_input_tokens"
+	UsageCacheReadInputTokensPathAnthropicMessages     = "usage.cache_read_input_tokens"
+
+	UsageInputTokensDetailsPathOpenAIChatCompletions = "usage.prompt_tokens_details"
+	UsageInputTokensDetailsPathOpenAIResponses       = "response.usage.input_tokens_details"
+	UsageInputTokensDetailsPathDoubao                = "usage.input_tokens_details"
+	UsageInputTokensDetailsPathGemini                = "usageMetadata.promptTokensDetails"
+
+	UsageOutputTokensPathOpenAIChatCompletions = "usage.completion_tokens"
+	UsageOutputTokensPathOpenAIImages          = "usage.output_tokens"
+	UsageOutputTokensPathOpenAIResponses       = "response.usage.output_tokens"
+	UsageOutputTokensPathGemini                = "usageMetadata.candidatesTokenCount"
+	UsageOutputTokensPathAnthropicMessages     = "message.usage.output_tokens"
+
+	UsageMetadataThoughtsTokenCountPathGemini      = "usageMetadata.thoughtsTokenCount"
+	UsageMetadataCachedContentTokenCountPathGemini = "usageMetadata.cachedContentTokenCount"
+	UsageMetadataToolUsePromptTokenCountPathGemini = "usageMetadata.toolUsePromptTokenCount"
+	UsageGeneratedImagesPathDoubao                 = "usage.generated_images"
+
+	UsageOutputTokensDetailsPathOpenAIChatCompletions = "usage.completion_tokens_details"
+	UsageOutputTokensDetailsPathOpenAIResponses       = "response.usage.output_tokens_details"
+	UsageOutputTokensDetailsPathDoubao                = "usage.output_tokens_details"
+	UsageOutputTokensDetailsPathGemini                = "usageMetadata.candidatesTokensDetails"
+
+	UsageTotalTokensPathOpenAIChatCompletions = "usage.total_tokens"
+	UsageTotalTokensPathOpenAIResponses       = "response.usage.total_tokens"
+	UsageTotalTokensPathGemini                = "usageMetadata.totalTokenCount"
+
+	InputTokenDetailsKeyAnthropicMessagesUsageCacheCreationInputTokens = "cache_creation_input_tokens"
+	InputTokenDetailsKeyAnthropicMessagesUsageCacheReadInputTokens     = "cache_read_input_tokens"
+	InputTokenDetailsKeyGeminiCachedContentTokenCount                  = "cached_content_token_count"
+	InputTokenDetailsKeyGeminiToolUsePromptTokenCount                  = "tool_use_prompt_token_count"
+
+	OutputTokenDetailsKeyDoubaoGeneratedImages    = "generated_images"
+	OutputTokenDetailsKeyGeminiThoughtsTokenCount = "thoughts_token_count"
 )
 
 type TokenUsage struct {
@@ -30,8 +86,8 @@ type TokenUsage struct {
 	AnthropicCacheReadInputToken     int64
 }
 
-func GetTokenUsage(ctx wrapper.HttpContext, data []byte) TokenUsage {
-	chunks := bytes.SplitSeq(bytes.TrimSpace(wrapper.UnifySSEChunk(data)), []byte("\n\n"))
+func GetTokenUsage(ctx wrapper.HttpContext, body []byte) TokenUsage {
+	chunks := bytes.SplitSeq(bytes.TrimSpace(wrapper.UnifySSEChunk(body)), []byte("\n\n"))
 	u := TokenUsage{
 		InputTokenDetails:  make(map[string]int64),
 		OutputTokenDetails: make(map[string]int64),
@@ -44,112 +100,156 @@ func GetTokenUsage(ctx wrapper.HttpContext, data []byte) TokenUsage {
 			continue
 		}
 
-		if model := wrapper.GetValueFromBody(chunk, []string{
-			"model",
-			"response.model", // responses
-			"message.model",  // anthropic messages
-			"modelVersion",   // Gemini GenerateContent
-		}); model != nil {
-			u.Model = model.String()
-		} else if model, ok := ctx.GetUserAttribute(CtxKeyModel).(string); ok && !slices.Contains([]string{"", "unknown"}, model) { // anthropic messages
-			u.Model = model
-		} else if model := ctx.GetStringContext(CtxKeyRequestModel, ""); model != "" { // Openai Image Generate
-			u.Model = model
-		} else {
-			u.Model = "unknown"
-		}
-		ctx.SetUserAttribute(CtxKeyModel, u.Model)
-
-		if inputToken := wrapper.GetValueFromBody(chunk, []string{
-			"usage.prompt_tokens",            // completions , chatcompleations
-			"usage.input_tokens",             // images, audio
-			"response.usage.input_tokens",    // responses
-			"usageMetadata.promptTokenCount", // Gemini GenerateContent
-			"message.usage.input_tokens",     // Anthrophic messages
-		}); inputToken != nil {
-			u.InputToken = inputToken.Int()
-		} else {
-			inputToken, ok := ctx.GetUserAttribute(CtxKeyInputToken).(int64) // anthropic messages
-			if ok && inputToken > 0 {
-				u.InputToken = inputToken
-			}
-		}
-		ctx.SetUserAttribute(CtxKeyInputToken, u.InputToken)
-
-		if outputToken := wrapper.GetValueFromBody(chunk, []string{
-			"usage.completion_tokens",            // completions , chatcompleations
-			"usage.output_tokens",                // images, audio
-			"response.usage.output_tokens",       // responses
-			"usageMetadata.candidatesTokenCount", // Gemini GeneratenContent
-			// "message.usage.output_tokens",        // Anthropic messages
-		}); outputToken != nil {
-			u.OutputToken = outputToken.Int()
-		} else {
-			outputToken, ok := ctx.GetUserAttribute(CtxKeyOutputToken).(int64)
-			if ok && outputToken > 0 {
-				u.OutputToken = outputToken
-			}
-		}
-		ctx.SetUserAttribute(CtxKeyOutputToken, u.OutputToken)
-
-		if inputTokensDetails := wrapper.GetValueFromBody(chunk, []string{
-			"usage.prompt_tokens_details",         // chatcompletions
-			"response.usage.input_tokens_details", // responses
-			"usage.input_tokens_details",          // Doubao
-			"usageMetadata.promptTokensDetails",   // Gemini GenerateContent
-		}); inputTokensDetails != nil && inputTokensDetails.IsObject() {
-			for key, value := range inputTokensDetails.Map() {
-				u.InputTokenDetails[key] = value.Int()
-			}
-		}
-		if geminiCachedContentTokenCount := wrapper.GetValueFromBody(data, []string{"usageMetadata.cachedContentTokenCount"}); geminiCachedContentTokenCount != nil {
-			u.InputTokenDetails["cachedContentTokenCount"] = geminiCachedContentTokenCount.Int()
-		}
-		if geminiToolUsePromptTokenCount := wrapper.GetValueFromBody(data, []string{"usageMetadata.toolUsePromptTokenCount"}); geminiToolUsePromptTokenCount != nil {
-			u.InputTokenDetails["toolUsePromptTokenCount"] = geminiToolUsePromptTokenCount.Int()
-		}
-		ctx.SetUserAttribute(CtxKeyInputTokenDetails, u.InputTokenDetails)
-
-		if outputTokensDetails := wrapper.GetValueFromBody(chunk, []string{
-			"usage.completion_tokens_details",       // completions , chatcompleations
-			"response.usage.output_tokens_details",  // responses
-			"usage.output_tokens_details",           // doubao
-			"usageMetadata.candidatesTokensDetails", // Gemini GenerateContent
-		}); outputTokensDetails != nil && outputTokensDetails.IsObject() {
-			for key, val := range outputTokensDetails.Map() {
-				u.OutputTokenDetails[key] = val.Int()
-			}
-		}
-		// Gemini GenerateContent
-		if geminiThoughtsTokenCount := wrapper.GetValueFromBody(data, []string{"usageMetadata.thoughtsTokenCount"}); geminiThoughtsTokenCount != nil {
-			u.OutputTokenDetails["thoughtsTokenCount"] = geminiThoughtsTokenCount.Int()
-		}
-		// Doubao Image Generate
-		if doubaoGeneratedImages := wrapper.GetValueFromBody(data, []string{"usage.generated_images"}); doubaoGeneratedImages != nil {
-			u.OutputTokenDetails["generated_images"] = doubaoGeneratedImages.Int()
-		}
-		ctx.SetUserAttribute(CtxKeyOutputTokenDetails, u.OutputTokenDetails)
-
-		// Anthropic Messages
-		if cacheCreationInputToken := wrapper.GetValueFromBody(chunk, []string{"usage.cache_creation_input_tokens"}); cacheCreationInputToken != nil {
-			u.AnthropicCacheCreationInputToken = cacheCreationInputToken.Int()
-			u.InputTokenDetails["cache_creation_input_tokens"] = cacheCreationInputToken.Int()
-		}
-		if cacheReadInputToken := wrapper.GetValueFromBody(chunk, []string{"usage.cache_read_input_tokens"}); cacheReadInputToken != nil {
-			u.AnthropicCacheReadInputToken = cacheReadInputToken.Int()
-			u.InputTokenDetails["cache_read_input_tokens"] = cacheReadInputToken.Int()
-		}
-
-		if totalToken := wrapper.GetValueFromBody(chunk, []string{
-			"usage.total_tokens",            // completions , chatcompleations, images, audio, responses
-			"response.usage.total_tokens",   // responses
-			"usageMetadata.totalTokenCount", // Gemini GenerationContent
-		}); totalToken != nil {
-			u.TotalToken = totalToken.Int()
-		} else {
-			u.TotalToken = u.InputToken + u.OutputToken + u.AnthropicCacheCreationInputToken + u.AnthropicCacheReadInputToken
-		}
-		ctx.SetUserAttribute(CtxKeyTotalToken, u.TotalToken)
+		ExtractModel(ctx, chunk, &u)
+		ExtractInputTokens(ctx, chunk, &u)
+		ExtractOutputTokens(ctx, chunk, &u)
+		ExtractInputTokenDetails(ctx, chunk, &u)
+		ExtractOutputTokenDetails(ctx, chunk, &u)
+		ExtractTotalTokens(ctx, chunk, &u)
 	}
 	return u
+}
+
+func ExtractModel(ctx wrapper.HttpContext, body []byte, u *TokenUsage) {
+	if model := wrapper.GetValueFromBody(body, []string{
+		ModelPathOpenAIChatCompletions,
+		ModelPathOpenAIResponses,       // responses
+		ModelPathAnthropicMessages,     // anthropic messages
+		ModelPathGeminiGenerateContent, // Gemini GenerateContent
+	}); model != nil {
+		u.Model = model.String()
+	} else if model, ok := ctx.GetUserAttribute(CtxKeyModel).(string); ok && !slices.Contains([]string{ModelEmpty, ModelUnknown}, model) { // anthropic messages
+		u.Model = model
+	} else if model := ctx.GetStringContext(CtxKeyRequestModel, ModelEmpty); model != ModelEmpty { // Openai Image Generate
+		u.Model = model
+	} else {
+		u.Model = ModelUnknown
+	}
+	ctx.SetUserAttribute(CtxKeyModel, u.Model)
+}
+
+func ExtractInputTokens(ctx wrapper.HttpContext, body []byte, u *TokenUsage) {
+	if inputToken := wrapper.GetValueFromBody(body, []string{
+		UsageInputTokensPathOpenAIChatCompletions, // completions , chatcompleations
+		UsageInputTokensPathOpenAIImages,          // images, audio
+		UsageInputTokensPathOpenAIResponses,       // responses
+		UsageInputTokensPathGemini,                // Gemini GenerateContent
+		UsageInputTokensPathAnthropicMessages,     // Anthrophic messages
+	}); inputToken != nil {
+		u.InputToken = inputToken.Int()
+	} else {
+		inputToken, ok := ctx.GetUserAttribute(CtxKeyInputToken).(int64) // anthropic messages
+		if ok && inputToken > 0 {
+			u.InputToken = inputToken
+		}
+	}
+	ctx.SetUserAttribute(CtxKeyInputToken, u.InputToken)
+}
+
+func ExtractOutputTokens(ctx wrapper.HttpContext, body []byte, u *TokenUsage) {
+	if outputToken := wrapper.GetValueFromBody(body, []string{
+		UsageOutputTokensPathOpenAIChatCompletions, // completions , chatcompleations
+		UsageOutputTokensPathOpenAIImages,          // images, audio
+		UsageOutputTokensPathOpenAIResponses,       // responses
+		UsageOutputTokensPathGemini,                // Gemini GeneratenContent
+		UsageOutputTokensPathAnthropicMessages,     // Anthropic messages
+	}); outputToken != nil {
+		u.OutputToken = outputToken.Int()
+	} else {
+		outputToken, ok := ctx.GetUserAttribute(CtxKeyOutputToken).(int64)
+		if ok && outputToken > 0 {
+			u.OutputToken = outputToken
+		}
+	}
+	ctx.SetUserAttribute(CtxKeyOutputToken, u.OutputToken)
+}
+
+func ExtractInputTokenDetails(ctx wrapper.HttpContext, body []byte, u *TokenUsage) {
+	if inputTokenDetails := wrapper.GetValueFromBody(body, []string{
+		UsageInputTokensDetailsPathOpenAIChatCompletions, // chatcompletions
+		UsageInputTokensDetailsPathOpenAIResponses,       // responses
+		UsageInputTokensDetailsPathDoubao,                // Doubao
+		UsageInputTokensDetailsPathGemini,                // Gemini GenerateContent
+	}); inputTokenDetails != nil && inputTokenDetails.IsObject() {
+		for key, value := range inputTokenDetails.Map() {
+			u.InputTokenDetails[key] = value.Int()
+		}
+	}
+
+	// Gemini GenerateContent
+	if geminiCachedContentTokenCount := wrapper.GetValueFromBody(body, []string{
+		UsageMetadataCachedContentTokenCountPathGemini,
+	}); geminiCachedContentTokenCount != nil {
+		u.InputTokenDetails[InputTokenDetailsKeyGeminiCachedContentTokenCount] = geminiCachedContentTokenCount.Int()
+	}
+	if geminiToolUsePromptTokenCount := wrapper.GetValueFromBody(body, []string{
+		UsageMetadataToolUsePromptTokenCountPathGemini,
+	}); geminiToolUsePromptTokenCount != nil {
+		u.InputTokenDetails[InputTokenDetailsKeyGeminiToolUsePromptTokenCount] = geminiToolUsePromptTokenCount.Int()
+	}
+
+	// Anthropic Messages
+	if cacheCreationInputToken := wrapper.GetValueFromBody(body, []string{
+		UsageCacheCreationInputTokensPathAnthropicMessages,
+	}); cacheCreationInputToken != nil {
+		u.AnthropicCacheCreationInputToken = cacheCreationInputToken.Int()
+		u.InputTokenDetails[InputTokenDetailsKeyAnthropicMessagesUsageCacheCreationInputTokens] = cacheCreationInputToken.Int()
+	}
+	if cacheReadInputToken := wrapper.GetValueFromBody(body, []string{
+		UsageCacheReadInputTokensPathAnthropicMessages,
+	}); cacheReadInputToken != nil {
+		u.AnthropicCacheReadInputToken = cacheReadInputToken.Int()
+		u.InputTokenDetails[InputTokenDetailsKeyAnthropicMessagesUsageCacheReadInputTokens] = cacheReadInputToken.Int()
+	}
+	ctx.SetUserAttribute(CtxKeyInputTokenDetails, u.InputTokenDetails)
+}
+
+func ExtractOutputTokenDetails(ctx wrapper.HttpContext, body []byte, u *TokenUsage) {
+	if outputTokensDetails := wrapper.GetValueFromBody(body, []string{
+		UsageOutputTokensDetailsPathOpenAIChatCompletions, // completions , chatcompleations
+		UsageOutputTokensDetailsPathOpenAIResponses,       // responses
+		UsageOutputTokensDetailsPathDoubao,                // doubao
+		UsageOutputTokensDetailsPathGemini,                // Gemini GenerateContent
+	}); outputTokensDetails != nil && outputTokensDetails.IsObject() {
+		for key, val := range outputTokensDetails.Map() {
+			u.OutputTokenDetails[key] = val.Int()
+		}
+	}
+	// Gemini GenerateContent
+	if geminiThoughtsTokenCount := wrapper.GetValueFromBody(body, []string{
+		UsageMetadataThoughtsTokenCountPathGemini,
+	}); geminiThoughtsTokenCount != nil {
+		u.OutputTokenDetails[OutputTokenDetailsKeyGeminiThoughtsTokenCount] = geminiThoughtsTokenCount.Int()
+	}
+	// Doubao Image Generate
+	if doubaoGeneratedImages := wrapper.GetValueFromBody(body, []string{
+		UsageGeneratedImagesPathDoubao,
+	}); doubaoGeneratedImages != nil {
+		u.OutputTokenDetails[OutputTokenDetailsKeyDoubaoGeneratedImages] = doubaoGeneratedImages.Int()
+	}
+	ctx.SetUserAttribute(CtxKeyOutputTokenDetails, u.OutputTokenDetails)
+}
+
+func ExtractTotalTokens(ctx wrapper.HttpContext, body []byte, u *TokenUsage) {
+	if totalToken := wrapper.GetValueFromBody(body, []string{
+		UsageTotalTokensPathOpenAIChatCompletions, // completions , chatcompleations, images, audio, responses
+		UsageTotalTokensPathOpenAIResponses,       // responses
+		UsageTotalTokensPathGemini,                // Gemini GenerationContent
+	}); totalToken != nil {
+		u.TotalToken = totalToken.Int()
+	} else {
+		u.TotalToken = u.InputToken + u.OutputToken + u.AnthropicCacheCreationInputToken + u.AnthropicCacheReadInputToken
+	}
+	ctx.SetUserAttribute(CtxKeyTotalToken, u.TotalToken)
+}
+
+func ExtractChatId(ctx wrapper.HttpContext, body []byte) {
+	if chatID := wrapper.GetValueFromBody(body, []string{
+		ChatIdPathOpenAIChatCompletions,
+		ChatIdPathOpenAIResponses,
+		ChatIdPathGemini,            // Gemini generateContent
+		ChatIdPathAnthropicMessages, // anthropic messages
+	}); chatID != nil {
+		ctx.SetUserAttribute(CtxKeyChatId, chatID.String())
+	}
 }
