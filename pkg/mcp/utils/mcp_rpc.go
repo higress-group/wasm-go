@@ -66,7 +66,7 @@ func SendMCPToolTextResult(ctx wrapper.HttpContext, result string, debugInfo ...
 	}, responseDebugInfo)
 }
 
-func SendMCPToolIMageResult(ctx wrapper.HttpContext, image []byte, contentType string, debugInfo ...string) {
+func SendMCPToolImageResult(ctx wrapper.HttpContext, image []byte, contentType string, debugInfo ...string) {
 	responseDebugInfo := "mcp:tools/call::result"
 	if len(debugInfo) > 0 {
 		responseDebugInfo = debugInfo[0]
