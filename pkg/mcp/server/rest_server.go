@@ -970,7 +970,7 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 			// 判断是否为图片
 			if strings.HasPrefix(contentType, "image/") {
 				// 处理图片的逻辑
-				utils.SendMCPToolIMageResult(ctx, responseBody, contentType, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+				utils.SendMCPToolImageResult(ctx, responseBody, contentType, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
 				return
 			}
 
