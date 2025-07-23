@@ -160,6 +160,96 @@ func (c *McpServerConfig) GetIsComposed() bool {
 	return c.isComposed
 }
 
+func ParseConfigOnlyRead(configJson gjson.Result, config *McpServerConfig, opts *ConfigOptions) error {
+	toolSetJson := configJson.Get("toolSet")
+	serverJson := configJson.Get("server")                        // This is for single server or REST server definition
+	pluginServerConfigJson := configJson.Get("server.config").Raw // Config for the plugin instance itself, if any.
+
+	// serverConfigJsonForInstance is the config passed to the specific server instance (single or REST)
+	// It's distinct from pluginServerConfigJson which might be for the mcp-server plugin itself.
+	var serverConfigJsonForInstance string
+
+	if toolSetJson.Exists() {
+		config.isComposed = true
+		var tsConfig ToolSetConfig
+		if err := json.Unmarshal([]byte(toolSetJson.Raw), &tsConfig); err != nil {
+			return fmt.Errorf("failed to parse toolSet config: %v", err)
+		}
+		config.toolSet = &tsConfig
+		config.serverName = tsConfig.Name // Use toolSet name as the server name for composed server
+		log.Infof("Parsing toolSet configuration: %s", config.serverName)
+
+		composedServer := NewComposedMCPServer(config.serverName, tsConfig.ServerTools, opts.ToolRegistry)
+		// A composed server itself might have a config block, e.g. for shared settings, though not typical.
+		composedServer.SetConfig([]byte(pluginServerConfigJson))
+		config.server = composedServer
+	} else if serverJson.Exists() {
+		config.isComposed = false
+		config.serverName = serverJson.Get("name").String()
+		if config.serverName == "" {
+			return errors.New("server.name field is missing for single server config")
+		}
+		// This is the config for the specific server being defined (e.g. REST server's own config)
+		serverConfigJsonForInstance = serverJson.Get("config").Raw
+		log.Infof("Parsing single server configuration: %s", config.serverName)
+
+		// Original logic for single server
+		toolsJson := configJson.Get("tools") // These are REST tools for this server instance
+		if toolsJson.Exists() && len(toolsJson.Array()) > 0 {
+			// Create REST-to-MCP server
+			restServer := NewRestMCPServer(config.serverName)         // Pass the server name
+			restServer.SetConfig([]byte(serverConfigJsonForInstance)) // Pass the server's specific config
+
+			securitySchemesJson := serverJson.Get("securitySchemes")
+			if securitySchemesJson.Exists() {
+				for _, schemeJson := range securitySchemesJson.Array() {
+					var scheme SecurityScheme
+					if err := json.Unmarshal([]byte(schemeJson.Raw), &scheme); err != nil {
+						return fmt.Errorf("failed to parse security scheme config: %v", err)
+					}
+					restServer.AddSecurityScheme(scheme)
+				}
+			}
+
+			for _, toolJson := range toolsJson.Array() {
+				var restTool RestTool
+				if err := json.Unmarshal([]byte(toolJson.Raw), &restTool); err != nil {
+					return fmt.Errorf("failed to parse tool config: %v", err)
+				}
+
+				if err := restServer.AddRestTool(restTool); err != nil {
+					return fmt.Errorf("failed to add tool %s: %v", restTool.Name, err)
+				}
+				// Register tool to registry
+				opts.ToolRegistry.RegisterTool(config.serverName, restTool.Name, restServer.GetMCPTools()[restTool.Name])
+			}
+			config.server = restServer
+		} else {
+			// Logic for pre-registered Go-based servers (non-REST)
+			if opts.SkipPreRegisteredServers {
+				// In validation mode, skip pre-registered servers validation
+				// Just validate the basic structure without actual server instance
+				config.server = nil // Will be handled appropriately in validation context
+			} else {
+				if serverInstance, exist := opts.Servers[config.serverName]; exist {
+					clonedServer := serverInstance.Clone()
+					clonedServer.SetConfig([]byte(serverConfigJsonForInstance)) // Pass the server's specific config
+					config.server = clonedServer
+					// Register tools from this server to registry
+					for toolName, toolInstance := range clonedServer.GetMCPTools() {
+						opts.ToolRegistry.RegisterTool(config.serverName, toolName, toolInstance)
+					}
+				} else {
+					return fmt.Errorf("mcp server type '%s' not registered", config.serverName)
+				}
+			}
+		}
+	} else {
+		return errors.New("either 'server' or 'toolSet' field must be present in the configuration")
+	}
+	return nil
+}
+
 // parseConfigCore contains the core config parsing logic with dependency injection
 func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *ConfigOptions) error {
 	toolSetJson := configJson.Get("toolSet")
