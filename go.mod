@@ -1,6 +1,11 @@
 module github.com/higress-group/wasm-go
 
-go 1.24.1
+go 1.22.0
+
+replace (
+	github.com/higress-group/gjson_template => github.com/higress-group/gjson_template v0.0.0-20250723083021-376d7407c3a3
+	github.com/higress-group/proxy-wasm-go-sdk => github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20250723083943-d2effc39c469
+)
 
 require (
 	github.com/google/uuid v1.6.0
