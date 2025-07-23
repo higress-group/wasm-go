@@ -88,7 +88,7 @@ func ValidateConfig(configJSON string) (*ValidationResult, error) {
 	configGjson := gjson.Parse(configJSON)
 	mockConfig := &server.McpServerConfig{}
 
-	err := server.ParseConfigOnlyRead(configGjson, mockConfig, deps)
+	err := server.ParseConfigCore(configGjson, mockConfig, deps)
 
 	result := &ValidationResult{
 		IsValid: err == nil,
