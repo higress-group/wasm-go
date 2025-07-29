@@ -651,19 +651,22 @@ func (ctx *CommonPluginCtx[PluginConfig]) NewHttpContext(contextID uint32) types
 
 type CommonHttpCtx[PluginConfig any] struct {
 	types.DefaultHttpContext
-	plugin                *CommonPluginCtx[PluginConfig]
-	config                *PluginConfig
-	needRequestBody       bool
-	needResponseBody      bool
-	streamingRequestBody  bool
-	streamingResponseBody bool
-	requestBodySize       int
-	responseBodySize      int
-	contextID             uint32
-	userContext           map[string]interface{}
-	userAttribute         map[string]interface{}
-	responseCallback      iface.RouteResponseCallback
-	executionPhase        iface.HTTPExecutionPhase
+	plugin                  *CommonPluginCtx[PluginConfig]
+	config                  *PluginConfig
+	needRequestBody         bool
+	needResponseBody        bool
+	streamingRequestBody    bool
+	streamingResponseBody   bool
+	pauseStreamingResponse  bool
+	disableStreamingHandler bool
+	requestBodySize         int
+	responseBodySize        int
+	contextID               uint32
+	userContext             map[string]interface{}
+	userAttribute           map[string]interface{}
+	bufferQueue             [][]byte
+	responseCallback        iface.RouteResponseCallback
+	executionPhase          iface.HTTPExecutionPhase
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) GetExecutionPhase() iface.HTTPExecutionPhase {
@@ -807,6 +810,31 @@ func (ctx *CommonHttpCtx[PluginConfig]) BufferResponseBody() {
 	ctx.streamingResponseBody = false
 }
 
+func (ctx *CommonHttpCtx[PluginConfig]) NeedPauseStreamingResponse() {
+	ctx.pauseStreamingResponse = true
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) DisableStreamingHandler() {
+	ctx.disableStreamingHandler = true
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) PushBuffer(buffer []byte) {
+	ctx.bufferQueue = append(ctx.bufferQueue, buffer)
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) PopBuffer() []byte {
+	var buffer []byte
+	if len(ctx.bufferQueue) > 0 {
+		buffer = ctx.bufferQueue[0]
+		ctx.bufferQueue = ctx.bufferQueue[1:]
+	}
+	return buffer
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) BufferQueueSize() int {
+	return len(ctx.bufferQueue)
+}
+
 func (ctx *CommonHttpCtx[PluginConfig]) DisableReroute() {
 	_ = proxywasm.SetProperty([]string{"clear_route_cache"}, []byte("off"))
 }
@@ -941,13 +969,16 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfSt
 		ctx.responseCallback(statusCode, headers, body)
 		return types.ActionContinue
 	}
-	if ctx.plugin.vm.onHttpStreamingResponseBody != nil && ctx.streamingResponseBody {
+	if ctx.plugin.vm.onHttpStreamingResponseBody != nil && ctx.streamingResponseBody && !ctx.disableStreamingHandler {
 		chunk, _ := proxywasm.GetHttpResponseBody(0, bodySize)
 		modifiedChunk := ctx.plugin.vm.onHttpStreamingResponseBody(ctx, *ctx.config, chunk, endOfStream)
 		err := proxywasm.ReplaceHttpResponseBody(modifiedChunk)
 		if err != nil {
 			ctx.plugin.vm.log.Warnf("replace response body chunk failed: %v", err)
 			return types.ActionContinue
+		}
+		if endOfStream && ctx.pauseStreamingResponse {
+			return types.ActionPause
 		}
 		return types.ActionContinue
 	}

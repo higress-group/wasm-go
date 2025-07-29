@@ -66,6 +66,16 @@ type HttpContext interface {
 	BufferRequestBody()
 	// If the onHttpStreamingResponseBody handle is not set, and the onHttpResponseBody handle is set, the response body will be buffered by default
 	BufferResponseBody()
+	// You can call this function to pause streaming response body and call proxywasm.ResumeHttpResponse to continue
+	NeedPauseStreamingResponse()
+	// You can call this function to disable streaming handler when you register both streaming & normal handlers
+	DisableStreamingHandler()
+	// Push data to inner buffer queue
+	PushBuffer(buffer []byte)
+	// Pop data from inner buffer queue
+	PopBuffer() []byte
+	// Get the size of inner buffer queue
+	BufferQueueSize() int
 	// If any request header is changed in onHttpRequestHeaders, envoy will re-calculate the route. Call this function to disable the re-routing.
 	// You need to call this before making any header modification operations.
 	DisableReroute()
