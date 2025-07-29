@@ -66,10 +66,21 @@ type HttpContext interface {
 	BufferRequestBody()
 	// If the onHttpStreamingResponseBody handle is not set, and the onHttpResponseBody handle is set, the response body will be buffered by default
 	BufferResponseBody()
-	// You can call this function to pause streaming response body and call proxywasm.ResumeHttpResponse to continue
+	// This extension adds support for pausing and modifying streaming HTTP responses
+	// using external HTTP service calls during the response body phase.
+	//
+	// Usage:
+	// 1. Call `NeedPauseStreamingResponse()` before the response phase starts
+	//    to indicate that streaming response processing should be paused.
+	// 2. During the streaming of response body chunks, the plugin performs
+	//    an asynchronous call to an external HTTP service.
+	// 3. Once the external HTTP call completes and the modified body is ready,
+	//    use `InjectEncodedDataToFilterChain()` to inject the updated streaming
+	//    body back into the filter chain for continued processing.
+	//
+	// This mechanism enables real-time transformation or inspection of
+	// streaming response data, with external service involvement.
 	NeedPauseStreamingResponse()
-	// You can call this function to disable streaming handler when you register both streaming & normal handlers
-	DisableStreamingHandler()
 	// Push data to inner buffer queue
 	PushBuffer(buffer []byte)
 	// Pop data from inner buffer queue
