@@ -124,6 +124,11 @@ func HasRequestBody() bool {
 	return strings.Contains(transferEncodingStr, "chunked")
 }
 
+func IsApplicationJson() bool {
+	contentTypeStr, _ := proxywasm.GetHttpResponseHeader("content-type")
+	return strings.Contains(contentTypeStr, "application/json")
+}
+
 func HasResponseBody() bool {
 	contentTypeStr, _ := proxywasm.GetHttpResponseHeader("content-type")
 	contentLengthStr, _ := proxywasm.GetHttpResponseHeader("content-length")
