@@ -29,6 +29,7 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"github.com/higress-group/wasm-go/pkg/iface"
 	"github.com/higress-group/wasm-go/pkg/log"
@@ -578,15 +579,15 @@ func (ctx *CommonPluginCtx[PluginConfig]) OnPluginStart(int) types.OnPluginStart
 		}
 	} else {
 		if !gjson.ValidBytes(data) {
-			log.Warnf("the plugin configuration is not a valid json: %s", string(data))
+			ctx.vm.log.Warnf("the plugin configuration is not a valid json: %s", string(data))
 			return types.OnPluginStartStatusFailed
-
+		}
+		pluginID := gjson.GetBytes(data, PluginIDKey).String()
+		if pluginID != "" {
+			ctx.vm.log.ResetID(pluginID)
+			data, _ = sjson.DeleteBytes([]byte(data), PluginIDKey)
 		}
 		jsonData = gjson.ParseBytes(data)
-	}
-	pluginID := jsonData.Get(PluginIDKey).String()
-	if pluginID != "" {
-		ctx.vm.log.ResetID(pluginID)
 	}
 	var parseOverrideConfig func(gjson.Result, PluginConfig, *PluginConfig) error
 	if ctx.vm.parseRuleConfig != nil {
@@ -651,19 +652,21 @@ func (ctx *CommonPluginCtx[PluginConfig]) NewHttpContext(contextID uint32) types
 
 type CommonHttpCtx[PluginConfig any] struct {
 	types.DefaultHttpContext
-	plugin                *CommonPluginCtx[PluginConfig]
-	config                *PluginConfig
-	needRequestBody       bool
-	needResponseBody      bool
-	streamingRequestBody  bool
-	streamingResponseBody bool
-	requestBodySize       int
-	responseBodySize      int
-	contextID             uint32
-	userContext           map[string]interface{}
-	userAttribute         map[string]interface{}
-	responseCallback      iface.RouteResponseCallback
-	executionPhase        iface.HTTPExecutionPhase
+	plugin                 *CommonPluginCtx[PluginConfig]
+	config                 *PluginConfig
+	needRequestBody        bool
+	needResponseBody       bool
+	streamingRequestBody   bool
+	streamingResponseBody  bool
+	pauseStreamingResponse bool
+	requestBodySize        int
+	responseBodySize       int
+	contextID              uint32
+	userContext            map[string]interface{}
+	userAttribute          map[string]interface{}
+	bufferQueue            [][]byte
+	responseCallback       iface.RouteResponseCallback
+	executionPhase         iface.HTTPExecutionPhase
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) GetExecutionPhase() iface.HTTPExecutionPhase {
@@ -807,6 +810,27 @@ func (ctx *CommonHttpCtx[PluginConfig]) BufferResponseBody() {
 	ctx.streamingResponseBody = false
 }
 
+func (ctx *CommonHttpCtx[PluginConfig]) NeedPauseStreamingResponse() {
+	ctx.pauseStreamingResponse = true
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) PushBuffer(buffer []byte) {
+	ctx.bufferQueue = append(ctx.bufferQueue, buffer)
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) PopBuffer() []byte {
+	var buffer []byte
+	if len(ctx.bufferQueue) > 0 {
+		buffer = ctx.bufferQueue[0]
+		ctx.bufferQueue = ctx.bufferQueue[1:]
+	}
+	return buffer
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) BufferQueueSize() int {
+	return len(ctx.bufferQueue)
+}
+
 func (ctx *CommonHttpCtx[PluginConfig]) DisableReroute() {
 	_ = proxywasm.SetProperty([]string{"clear_route_cache"}, []byte("off"))
 }
@@ -948,6 +972,9 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfSt
 		if err != nil {
 			ctx.plugin.vm.log.Warnf("replace response body chunk failed: %v", err)
 			return types.ActionContinue
+		}
+		if ctx.pauseStreamingResponse {
+			return types.DataStopIterationNoBuffer
 		}
 		return types.ActionContinue
 	}

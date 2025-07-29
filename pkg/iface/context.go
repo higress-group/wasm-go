@@ -66,6 +66,27 @@ type HttpContext interface {
 	BufferRequestBody()
 	// If the onHttpStreamingResponseBody handle is not set, and the onHttpResponseBody handle is set, the response body will be buffered by default
 	BufferResponseBody()
+	// This extension adds support for pausing and modifying streaming HTTP responses
+	// using external HTTP service calls during the response body phase.
+	//
+	// Usage:
+	// 1. Call `NeedPauseStreamingResponse()` before the response phase starts
+	//    to indicate that streaming response processing should be paused.
+	// 2. During the streaming of response body chunks, the plugin performs
+	//    an asynchronous call to an external HTTP service.
+	// 3. Once the external HTTP call completes and the modified body is ready,
+	//    use `InjectEncodedDataToFilterChain()` to inject the updated streaming
+	//    body back into the filter chain for continued processing.
+	//
+	// This mechanism enables real-time transformation or inspection of
+	// streaming response data, with external service involvement.
+	NeedPauseStreamingResponse()
+	// Push data to inner buffer queue
+	PushBuffer(buffer []byte)
+	// Pop data from inner buffer queue
+	PopBuffer() []byte
+	// Get the size of inner buffer queue
+	BufferQueueSize() int
 	// If any request header is changed in onHttpRequestHeaders, envoy will re-calculate the route. Call this function to disable the re-routing.
 	// You need to call this before making any header modification operations.
 	DisableReroute()
