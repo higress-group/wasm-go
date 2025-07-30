@@ -40,6 +40,7 @@ const (
 	ChatIdPathAnthropicMessages     = "message.id"
 
 	ModelPathOpenAIChatCompletions = "model"
+	ModelPathOpenAIBatches         = "body.model"
 	ModelPathOpenAIResponses       = "response.model"
 	ModelPathAnthropicMessages     = "message.model"
 	ModelPathGeminiGenerateContent = "modelVersion"
@@ -127,6 +128,7 @@ func GetTokenUsage(ctx wrapper.HttpContext, body []byte) TokenUsage {
 func ExtractModel(ctx wrapper.HttpContext, body []byte, u *TokenUsage) {
 	if model := wrapper.GetValueFromBody(body, []string{
 		ModelPathOpenAIChatCompletions,
+		ModelPathOpenAIBatches,         // batches
 		ModelPathOpenAIResponses,       // responses
 		ModelPathAnthropicMessages,     // anthropic messages
 		ModelPathGeminiGenerateContent, // Gemini GenerateContent
