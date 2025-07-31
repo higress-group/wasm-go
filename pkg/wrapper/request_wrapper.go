@@ -71,6 +71,15 @@ func GetRequestMethod() string {
 	return method
 }
 
+func IsWebsocket() bool {
+	connection, _ := proxywasm.GetHttpRequestHeader("connection")
+	upgrade, _ := proxywasm.GetHttpRequestHeader("upgrade")
+	if strings.EqualFold(connection, "upgrade") && strings.EqualFold(upgrade, "websocket") {
+		return true
+	}
+	return false
+}
+
 func IsBinaryRequestBody() bool {
 	contentType, _ := proxywasm.GetHttpRequestHeader("content-type")
 	if strings.Contains(contentType, "octet-stream") ||
@@ -113,6 +122,11 @@ func HasRequestBody() bool {
 		}
 	}
 	return strings.Contains(transferEncodingStr, "chunked")
+}
+
+func IsApplicationJson() bool {
+	contentTypeStr, _ := proxywasm.GetHttpResponseHeader("content-type")
+	return strings.Contains(contentTypeStr, "application/json")
 }
 
 func HasResponseBody() bool {

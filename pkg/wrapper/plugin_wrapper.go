@@ -16,6 +16,7 @@ package wrapper
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"runtime"
@@ -27,60 +28,26 @@ import (
 	"github.com/google/uuid"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
+
+	"github.com/higress-group/wasm-go/pkg/iface"
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/matcher"
-	"github.com/tidwall/gjson"
 )
 
 type Log log.Log
+type PluginContext iface.PluginContext
+type HttpContext iface.HttpContext
 
 const (
-	CustomLogKey       = "custom_log"
-	AILogKey           = "ai_log"
-	TraceSpanTagPrefix = "trace_span_tag."
-	PluginIDKey        = "_plugin_id_"
+	CustomLogKey         = "custom_log"
+	AILogKey             = "ai_log"
+	TraceSpanTagPrefix   = "trace_span_tag."
+	PluginIDKey          = "_plugin_id_"
+	VMLeaseKeyPrefix     = "higress_wasm_vm_lease"
+	ConfigStoreLeaderKey = "config_store"
 )
-
-type HttpContext interface {
-	Scheme() string
-	Host() string
-	Path() string
-	Method() string
-	SetContext(key string, value interface{})
-	GetContext(key string) interface{}
-	GetBoolContext(key string, defaultValue bool) bool
-	GetStringContext(key, defaultValue string) string
-	GetByteSliceContext(key string, defaultValue []byte) []byte
-	GetUserAttribute(key string) interface{}
-	SetUserAttribute(key string, value interface{})
-	SetUserAttributeMap(kvmap map[string]interface{})
-	GetUserAttributeMap() map[string]interface{}
-	// You can call this function to set custom log
-	WriteUserAttributeToLog() error
-	// You can call this function to set custom log with your specific key
-	WriteUserAttributeToLogWithKey(key string) error
-	// You can call this function to set custom trace span attribute
-	WriteUserAttributeToTrace() error
-	// If the onHttpRequestBody handle is not set, the request body will not be read by default
-	DontReadRequestBody()
-	// If the onHttpResponseBody handle is not set, the request body will not be read by default
-	DontReadResponseBody()
-	// If the onHttpStreamingRequestBody handle is not set, and the onHttpRequestBody handle is set, the request body will be buffered by default
-	BufferRequestBody()
-	// If the onHttpStreamingResponseBody handle is not set, and the onHttpResponseBody handle is set, the response body will be buffered by default
-	BufferResponseBody()
-	// If any request header is changed in onHttpRequestHeaders, envoy will re-calculate the route. Call this function to disable the re-routing.
-	// You need to call this before making any header modification operations.
-	DisableReroute()
-	// Note that this parameter affects the gateway's memory usage！Support setting a maximum buffer size for each request body individually in request phase.
-	SetRequestBodyBufferLimit(byteSize uint32)
-	// Note that this parameter affects the gateway's memory usage! Support setting a maximum buffer size for each response body individually in response phase.
-	SetResponseBodyBufferLimit(byteSize uint32)
-	// Make a request to the target service of the current route using the specified URL and header.
-	RouteCall(method, url string, headers [][2]string, body []byte, callback RouteResponseCallback) error
-	// Get the execution phase of the current plugin
-	GetExecutionPhase() HTTPExecutionPhase
-}
 
 type oldParseConfigFunc[PluginConfig any] func(json gjson.Result, config *PluginConfig, log log.Log) error
 type oldParseRuleConfigFunc[PluginConfig any] func(json gjson.Result, global PluginConfig, config *PluginConfig, log log.Log) error
@@ -89,22 +56,29 @@ type oldOnHttpBodyFunc[PluginConfig any] func(context HttpContext, config Plugin
 type oldOnHttpStreamingBodyFunc[PluginConfig any] func(context HttpContext, config PluginConfig, chunk []byte, isLastChunk bool, log log.Log) []byte
 type oldOnHttpStreamDoneFunc[PluginConfig any] func(context HttpContext, config PluginConfig, log log.Log)
 
+type ParseConfigWithContextFunc[PluginConfig any] func(context PluginContext, json gjson.Result, config *PluginConfig) error
 type ParseConfigFunc[PluginConfig any] func(json gjson.Result, config *PluginConfig) error
 type ParseRawConfigFunc[PluginConfig any] func(configBytes []byte, config *PluginConfig) error
+type ParseRawConfigWithContextFunc[PluginConfig any] func(context PluginContext, configBytes []byte, config *PluginConfig) error
 type ParseRuleConfigFunc[PluginConfig any] func(json gjson.Result, global PluginConfig, config *PluginConfig) error
 type ParseRawRuleConfigFunc[PluginConfig any] func(configBytes []byte, global PluginConfig, config *PluginConfig) error
+type ParseRawRuleConfigWithContextFunc[PluginConfig any] func(context PluginContext, configBytes []byte, global PluginConfig, config *PluginConfig) error
 type onHttpHeadersFunc[PluginConfig any] func(context HttpContext, config PluginConfig) types.Action
 type onHttpBodyFunc[PluginConfig any] func(context HttpContext, config PluginConfig, body []byte) types.Action
 type onHttpStreamingBodyFunc[PluginConfig any] func(context HttpContext, config PluginConfig, chunk []byte, isLastChunk bool) []byte
 type onHttpStreamDoneFunc[PluginConfig any] func(context HttpContext, config PluginConfig)
+
+type onPluginStartOrReload func(context PluginContext) error
 
 type CommonVmCtx[PluginConfig any] struct {
 	types.DefaultVMContext
 	pluginName                  string
 	log                         log.Log
 	hasCustomConfig             bool
-	parseConfig                 ParseRawConfigFunc[PluginConfig]
-	parseRuleConfig             ParseRawRuleConfigFunc[PluginConfig]
+	vmID                        string
+	prePluginStartOrReload      onPluginStartOrReload
+	parseConfig                 ParseRawConfigWithContextFunc[PluginConfig]
+	parseRuleConfig             ParseRawRuleConfigWithContextFunc[PluginConfig]
 	onHttpRequestHeaders        onHttpHeadersFunc[PluginConfig]
 	onHttpRequestBody           onHttpBodyFunc[PluginConfig]
 	onHttpStreamingRequestBody  onHttpStreamingBodyFunc[PluginConfig]
@@ -153,18 +127,25 @@ type parseConfigOption[PluginConfig any] struct {
 	rawF ParseRawConfigFunc[PluginConfig]
 	f    ParseConfigFunc[PluginConfig]
 	oldF oldParseConfigFunc[PluginConfig]
+	ctxF ParseConfigWithContextFunc[PluginConfig]
 }
 
 func (o parseConfigOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
 	if o.rawF != nil {
-		ctx.parseConfig = o.rawF
+		ctx.parseConfig = func(context PluginContext, configBytes []byte, config *PluginConfig) error {
+			return o.rawF(configBytes, config)
+		}
 	} else if o.f != nil {
-		ctx.parseConfig = func(configBytes []byte, config *PluginConfig) error {
+		ctx.parseConfig = func(context PluginContext, configBytes []byte, config *PluginConfig) error {
 			return o.f(gjson.ParseBytes(configBytes), config)
 		}
-	} else {
-		ctx.parseConfig = func(configBytes []byte, config *PluginConfig) error {
+	} else if o.oldF != nil {
+		ctx.parseConfig = func(context PluginContext, configBytes []byte, config *PluginConfig) error {
 			return o.oldF(gjson.ParseBytes(configBytes), config, ctx.log)
+		}
+	} else if o.ctxF != nil {
+		ctx.parseConfig = func(context PluginContext, configBytes []byte, config *PluginConfig) error {
+			return o.ctxF(context, gjson.ParseBytes(configBytes), config)
 		}
 	}
 }
@@ -176,6 +157,10 @@ func ParseConfigBy[PluginConfig any](f oldParseConfigFunc[PluginConfig]) CtxOpti
 
 func ParseConfig[PluginConfig any](f ParseConfigFunc[PluginConfig]) CtxOption[PluginConfig] {
 	return &parseConfigOption[PluginConfig]{f: f}
+}
+
+func ParseConfigWithContext[PluginConfig any](f ParseConfigWithContextFunc[PluginConfig]) CtxOption[PluginConfig] {
+	return &parseConfigOption[PluginConfig]{ctxF: f}
 }
 
 func ParseRawConfig[PluginConfig any](f ParseRawConfigFunc[PluginConfig]) CtxOption[PluginConfig] {
@@ -193,20 +178,24 @@ type parseOverrideConfigOption[PluginConfig any] struct {
 
 func (o *parseOverrideConfigOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
 	if o.parseRawConfigF != nil && o.parseRawRuleConfigF != nil {
-		ctx.parseConfig = o.parseRawConfigF
-		ctx.parseRuleConfig = o.parseRawRuleConfigF
+		ctx.parseConfig = func(context PluginContext, configBytes []byte, config *PluginConfig) error {
+			return o.parseRawConfigF(configBytes, config)
+		}
+		ctx.parseRuleConfig = func(context PluginContext, configBytes []byte, global PluginConfig, config *PluginConfig) error {
+			return o.parseRawRuleConfigF(configBytes, global, config)
+		}
 	} else if o.parseConfigF != nil && o.parseRuleConfigF != nil {
-		ctx.parseConfig = func(configBytes []byte, config *PluginConfig) error {
+		ctx.parseConfig = func(context PluginContext, configBytes []byte, config *PluginConfig) error {
 			return o.parseConfigF(gjson.ParseBytes(configBytes), config)
 		}
-		ctx.parseRuleConfig = func(configBytes []byte, global PluginConfig, config *PluginConfig) error {
+		ctx.parseRuleConfig = func(context PluginContext, configBytes []byte, global PluginConfig, config *PluginConfig) error {
 			return o.parseRuleConfigF(gjson.ParseBytes(configBytes), global, config)
 		}
 	} else {
-		ctx.parseConfig = func(configBytes []byte, config *PluginConfig) error {
+		ctx.parseConfig = func(context PluginContext, configBytes []byte, config *PluginConfig) error {
 			return o.oldParseConfigF(gjson.ParseBytes(configBytes), config, ctx.log)
 		}
-		ctx.parseRuleConfig = func(configBytes []byte, global PluginConfig, config *PluginConfig) error {
+		ctx.parseRuleConfig = func(context PluginContext, configBytes []byte, global PluginConfig, config *PluginConfig) error {
 			return o.oldParseRuleConfigF(gjson.ParseBytes(configBytes), global, config, ctx.log)
 		}
 	}
@@ -414,7 +403,19 @@ func WithLogger[PluginConfig any](logger log.Log) CtxOption[PluginConfig] {
 	return &logOption[PluginConfig]{logger}
 }
 
-func parseEmptyPluginConfig[PluginConfig any]([]byte, *PluginConfig) error {
+type prePluginOption[PluginConfig any] struct {
+	f onPluginStartOrReload
+}
+
+func (o *prePluginOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
+	ctx.prePluginStartOrReload = o.f
+}
+
+func PrePluginStartOrReload[PluginConfig any](f onPluginStartOrReload) CtxOption[PluginConfig] {
+	return &prePluginOption[PluginConfig]{f}
+}
+
+func parseEmptyPluginConfig[PluginConfig any](PluginContext, []byte, *PluginConfig) error {
 	return nil
 }
 
@@ -434,6 +435,7 @@ func NewCommonVmCtxWithOptions[PluginConfig any](pluginName string, options ...C
 	ctx := &CommonVmCtx[PluginConfig]{
 		pluginName:      pluginName,
 		hasCustomConfig: true,
+		vmID:            uuid.New().String(),
 	}
 	for _, opt := range options {
 		opt.Apply(ctx)
@@ -452,67 +454,167 @@ func NewCommonVmCtxWithOptions[PluginConfig any](pluginName string, options ...C
 
 func (ctx *CommonVmCtx[PluginConfig]) NewPluginContext(uint32) types.PluginContext {
 	return &CommonPluginCtx[PluginConfig]{
-		vm: ctx,
+		vm:          ctx,
+		userContext: map[string]interface{}{},
 	}
 }
 
 type CommonPluginCtx[PluginConfig any] struct {
 	types.DefaultPluginContext
 	matcher.RuleMatcher[PluginConfig]
-	vm          *CommonVmCtx[PluginConfig]
-	onTickFuncs []TickFuncEntry
+	vm                 *CommonVmCtx[PluginConfig]
+	onTickFuncs        []TickFuncEntry
+	userContext        map[string]interface{}
+	fingerPrint        string
+	ruleLevelIsolation bool
+	isLeader           bool
+}
+
+type Lease struct {
+	VMID      string `json:"vmID"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+func (ctx *CommonPluginCtx[PluginConfig]) DoLeaderElection() {
+	ctx.isLeader = ctx.tryAcquireOrRenewLease()
+}
+
+func (ctx *CommonPluginCtx[PluginConfig]) leaderLeaseKey() string {
+	return fmt.Sprintf("%s:%s", VMLeaseKeyPrefix, ctx.fingerPrint)
+}
+
+func (ctx *CommonPluginCtx[PluginConfig]) tryAcquireOrRenewLease() bool {
+	now := time.Now().Unix()
+
+	data, cas, err := proxywasm.GetSharedData(ctx.leaderLeaseKey())
+	if err != nil {
+		if errors.Is(err, types.ErrorStatusNotFound) {
+			return ctx.setLease(now, cas)
+		} else {
+			log.Errorf("Failed to get lease: %v", err)
+			return false
+		}
+	}
+	if data == nil {
+		return ctx.setLease(now, cas)
+	}
+
+	var lease Lease
+	err = json.Unmarshal(data, &lease)
+	if err != nil {
+		log.Errorf("Failed to unmarshal lease data: %v", err)
+		return false
+	}
+	// If vmID is itself, try to renew the lease directly
+	// If the lease is expired (60s), try to acquire the lease
+	if lease.VMID == ctx.vm.vmID || now-lease.Timestamp > 60 {
+		lease.VMID = ctx.vm.vmID
+		lease.Timestamp = now
+		return ctx.setLease(now, cas)
+	}
+
+	return false
+}
+
+func (ctx *CommonPluginCtx[PluginConfig]) setLease(timestamp int64, cas uint32) bool {
+	lease := Lease{
+		VMID:      ctx.vm.vmID,
+		Timestamp: timestamp,
+	}
+	leaseByte, err := json.Marshal(lease)
+	if err != nil {
+		log.Errorf("Failed to marshal lease data: %v", err)
+		return false
+	}
+
+	if err := proxywasm.SetSharedData(ctx.leaderLeaseKey(), leaseByte, cas); err != nil {
+		log.Errorf("Failed to set or renew lease: %v", err)
+		return false
+	}
+	return true
+}
+
+func (ctx *CommonPluginCtx[PluginConfig]) IsLeader() bool {
+	return ctx.isLeader
+}
+
+func (ctx *CommonPluginCtx[PluginConfig]) IsRuleLevelConfigIsolation() bool {
+	return ctx.ruleLevelIsolation
+}
+
+func (ctx *CommonPluginCtx[PluginConfig]) GetFingerPrint() string {
+	return ctx.fingerPrint
+}
+
+func (ctx *CommonPluginCtx[PluginConfig]) EnableRuleLevelConfigIsolation() {
+	ctx.ruleLevelIsolation = true
+}
+
+func (ctx *CommonPluginCtx[PluginConfig]) GetContext(key string) interface{} {
+	return ctx.userContext[key]
+}
+
+func (ctx *CommonPluginCtx[PluginConfig]) SetContext(key string, value interface{}) {
+	ctx.userContext[key] = value
 }
 
 func (ctx *CommonPluginCtx[PluginConfig]) OnPluginStart(int) types.OnPluginStartStatus {
+	if ctx.vm.prePluginStartOrReload != nil {
+		err := ctx.vm.prePluginStartOrReload(ctx)
+		if err != nil {
+			log.Errorf("prePluginStartOrReload hook failed: %v", err)
+			return types.OnPluginStartStatusFailed
+		}
+	}
 	data, err := proxywasm.GetPluginConfiguration()
 	globalOnTickFuncs = nil
 	if err != nil && err != types.ErrorStatusNotFound {
-		ctx.vm.log.Criticalf("error reading plugin configuration: %v", err)
+		log.Criticalf("error reading plugin configuration: %v", err)
 		return types.OnPluginStartStatusFailed
 	}
 	var jsonData gjson.Result
 	if len(data) == 0 {
 		if ctx.vm.hasCustomConfig {
-			ctx.vm.log.Warn("config is empty, but has ParseConfigFunc")
+			log.Warn("config is empty, but has ParseConfigFunc")
 		}
 	} else {
 		if !gjson.ValidBytes(data) {
 			ctx.vm.log.Warnf("the plugin configuration is not a valid json: %s", string(data))
 			return types.OnPluginStartStatusFailed
-
+		}
+		pluginID := gjson.GetBytes(data, PluginIDKey).String()
+		if pluginID != "" {
+			ctx.vm.log.ResetID(pluginID)
+			data, _ = sjson.DeleteBytes([]byte(data), PluginIDKey)
 		}
 		jsonData = gjson.ParseBytes(data)
-	}
-	pluginID := jsonData.Get(PluginIDKey).String()
-	if pluginID != "" {
-		ctx.vm.log.ResetID(pluginID)
 	}
 	var parseOverrideConfig func(gjson.Result, PluginConfig, *PluginConfig) error
 	if ctx.vm.parseRuleConfig != nil {
 		parseOverrideConfig = func(js gjson.Result, global PluginConfig, cfg *PluginConfig) error {
-			return ctx.vm.parseRuleConfig([]byte(js.Raw), global, cfg)
+			return ctx.vm.parseRuleConfig(ctx, []byte(js.Raw), global, cfg)
 		}
 	}
-	err = ctx.ParseRuleConfig(jsonData,
+	err = ctx.ParseRuleConfig(ctx, jsonData,
 		func(js gjson.Result, cfg *PluginConfig) error {
-			return ctx.vm.parseConfig([]byte(js.Raw), cfg)
+			return ctx.vm.parseConfig(ctx, []byte(js.Raw), cfg)
 		},
 		parseOverrideConfig,
 	)
 	if err != nil {
-		ctx.vm.log.Warnf("parse rule config failed: %v", err)
-		ctx.vm.log.Error("plugin start failed")
+		log.Warnf("parse rule config failed: %v", err)
+		log.Error("plugin start failed")
 		return types.OnPluginStartStatusFailed
 	}
 	if globalOnTickFuncs != nil {
 		ctx.onTickFuncs = globalOnTickFuncs
 		if err := proxywasm.SetTickPeriodMilliSeconds(100); err != nil {
-			ctx.vm.log.Error("SetTickPeriodMilliSeconds failed, onTick functions will not take effect.")
-			ctx.vm.log.Error("plugin start failed")
+			log.Error("SetTickPeriodMilliSeconds failed, onTick functions will not take effect.")
+			log.Error("plugin start failed")
 			return types.OnPluginStartStatusFailed
 		}
 	}
-	ctx.vm.log.Info("plugin start successfully")
+	log.Info("plugin start successfully")
 	return types.OnPluginStartStatusOK
 }
 
@@ -548,36 +650,26 @@ func (ctx *CommonPluginCtx[PluginConfig]) NewHttpContext(contextID uint32) types
 	return httpCtx
 }
 
-type RouteResponseCallback func(statusCode int, responseHeaders [][2]string, responseBody []byte)
-
-type HTTPExecutionPhase int
-
-const (
-	DecodeHeader HTTPExecutionPhase = iota
-	DecodeData
-	EncodeHeader
-	EncodeData
-	Done
-)
-
 type CommonHttpCtx[PluginConfig any] struct {
 	types.DefaultHttpContext
-	plugin                *CommonPluginCtx[PluginConfig]
-	config                *PluginConfig
-	needRequestBody       bool
-	needResponseBody      bool
-	streamingRequestBody  bool
-	streamingResponseBody bool
-	requestBodySize       int
-	responseBodySize      int
-	contextID             uint32
-	userContext           map[string]interface{}
-	userAttribute         map[string]interface{}
-	responseCallback      RouteResponseCallback
-	executionPhase        HTTPExecutionPhase
+	plugin                 *CommonPluginCtx[PluginConfig]
+	config                 *PluginConfig
+	needRequestBody        bool
+	needResponseBody       bool
+	streamingRequestBody   bool
+	streamingResponseBody  bool
+	pauseStreamingResponse bool
+	requestBodySize        int
+	responseBodySize       int
+	contextID              uint32
+	userContext            map[string]interface{}
+	userAttribute          map[string]interface{}
+	bufferQueue            [][]byte
+	responseCallback       iface.RouteResponseCallback
+	executionPhase         iface.HTTPExecutionPhase
 }
 
-func (ctx *CommonHttpCtx[PluginConfig]) GetExecutionPhase() HTTPExecutionPhase {
+func (ctx *CommonHttpCtx[PluginConfig]) GetExecutionPhase() iface.HTTPExecutionPhase {
 	return ctx.executionPhase
 }
 
@@ -718,6 +810,27 @@ func (ctx *CommonHttpCtx[PluginConfig]) BufferResponseBody() {
 	ctx.streamingResponseBody = false
 }
 
+func (ctx *CommonHttpCtx[PluginConfig]) NeedPauseStreamingResponse() {
+	ctx.pauseStreamingResponse = true
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) PushBuffer(buffer []byte) {
+	ctx.bufferQueue = append(ctx.bufferQueue, buffer)
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) PopBuffer() []byte {
+	var buffer []byte
+	if len(ctx.bufferQueue) > 0 {
+		buffer = ctx.bufferQueue[0]
+		ctx.bufferQueue = ctx.bufferQueue[1:]
+	}
+	return buffer
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) BufferQueueSize() int {
+	return len(ctx.bufferQueue)
+}
+
 func (ctx *CommonHttpCtx[PluginConfig]) DisableReroute() {
 	_ = proxywasm.SetProperty([]string{"clear_route_cache"}, []byte("off"))
 }
@@ -734,7 +847,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) SetResponseBodyBufferLimit(size uint32) 
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, endOfStream bool) types.Action {
 	defer recoverFunc()
-	ctx.executionPhase = DecodeHeader
+	ctx.executionPhase = iface.DecodeHeader
 	requestID, _ := proxywasm.GetHttpRequestHeader("x-request-id")
 	_ = proxywasm.SetProperty([]string{"x_request_id"}, []byte(requestID))
 	config, err := ctx.plugin.GetMatchConfig()
@@ -750,6 +863,10 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 	if IsBinaryRequestBody() {
 		ctx.needRequestBody = false
 	}
+	if IsWebsocket() {
+		ctx.needRequestBody = false
+		ctx.needResponseBody = false
+	}
 	if ctx.plugin.vm.onHttpRequestHeaders == nil {
 		return types.ActionContinue
 	}
@@ -758,7 +875,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStream bool) types.Action {
 	defer recoverFunc()
-	ctx.executionPhase = DecodeData
+	ctx.executionPhase = iface.DecodeData
 	if ctx.config == nil {
 		return types.ActionContinue
 	}
@@ -792,7 +909,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseHeaders(numHeaders int, endOfStream bool) types.Action {
 	defer recoverFunc()
-	ctx.executionPhase = EncodeHeader
+	ctx.executionPhase = iface.EncodeHeader
 	if ctx.config == nil {
 		return types.ActionContinue
 	}
@@ -822,7 +939,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseHeaders(numHeaders int, en
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfStream bool) types.Action {
 	defer recoverFunc()
-	ctx.executionPhase = EncodeData
+	ctx.executionPhase = iface.EncodeData
 	if ctx.config == nil {
 		return types.ActionContinue
 	}
@@ -856,6 +973,9 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfSt
 			ctx.plugin.vm.log.Warnf("replace response body chunk failed: %v", err)
 			return types.ActionContinue
 		}
+		if ctx.pauseStreamingResponse {
+			return types.DataStopIterationNoBuffer
+		}
 		return types.ActionContinue
 	}
 	if ctx.plugin.vm.onHttpResponseBody != nil {
@@ -873,7 +993,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfSt
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpStreamDone() {
-	ctx.executionPhase = Done
+	ctx.executionPhase = iface.Done
 	defer recoverFunc()
 	if ctx.config == nil {
 		return
@@ -885,7 +1005,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpStreamDone() {
 }
 
 // This RouteCall must only be invoked during the request body phase, and it requires that stopIteration has been returned during the request header phase.
-func (ctx *CommonHttpCtx[PluginConfig]) RouteCall(method, rawURL string, headers [][2]string, body []byte, callback RouteResponseCallback) error {
+func (ctx *CommonHttpCtx[PluginConfig]) RouteCall(method, rawURL string, headers [][2]string, body []byte, callback iface.RouteResponseCallback) error {
 	proxywasm.RemoveHttpRequestHeader("Accept-Encoding")
 	proxywasm.RemoveHttpRequestHeader("Content-Length")
 	requestID := uuid.New().String()

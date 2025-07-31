@@ -24,6 +24,7 @@ import (
 	"github.com/tidwall/sjson"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/higress-group/wasm-go/pkg/iface"
 	"github.com/higress-group/wasm-go/pkg/log"
 	pb "github.com/higress-group/wasm-go/pkg/protos"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -74,7 +75,7 @@ type MethodHandlers map[string]JsonRpcMethodHandler
 
 func makeHttpResponse(ctx wrapper.HttpContext, code uint32, debugInfo string, headers [][2]string, body []byte) {
 	phase := ctx.GetExecutionPhase()
-	if phase < wrapper.EncodeHeader {
+	if phase < iface.EncodeHeader {
 		proxywasm.SendHttpResponseWithDetail(code, debugInfo, headers, body, -1)
 		return
 	}
@@ -86,7 +87,7 @@ func makeHttpResponse(ctx wrapper.HttpContext, code uint32, debugInfo string, he
 	for _, kv := range headers {
 		proxywasm.ReplaceHttpResponseHeader(kv[0], kv[1])
 	}
-	if phase == wrapper.EncodeData {
+	if phase == iface.EncodeData {
 		proxywasm.ReplaceHttpResponseBody(body)
 		return
 	}

@@ -78,7 +78,7 @@ func ValidateConfig(configJSON string) (*ValidationResult, error) {
 	toolRegistry := &server.GlobalToolRegistry{}
 	toolRegistry.Initialize() // Initialize the registry to prevent nil map assignment panic
 
-	deps := &server.ConfigDependencies{
+	deps := &server.ConfigOptions{
 		Servers:                  make(map[string]server.Server), // Empty servers map
 		ToolRegistry:             toolRegistry,                   // Initialized registry
 		SkipPreRegisteredServers: true,                           // Skip pre-registered servers
