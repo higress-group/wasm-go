@@ -181,6 +181,11 @@ func (t *RestTool) parseTemplates() error {
 		// Parse header templates
 		t.parsedHeaderTemplates = make(map[string]*template.Template)
 		for i, header := range t.RequestTemplate.Headers {
+			if header.Key == "" {
+				log.Warnf("Skipping header with empty key at index %d", i)
+				continue
+			}
+
 			tmplName := fmt.Sprintf("header_%d", i)
 			t.parsedHeaderTemplates[header.Key], err = template.New(tmplName).Funcs(templateFuncs()).Parse(header.Value)
 			if err != nil {
@@ -698,7 +703,11 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 
 	// Execute header templates from tool config
 	headers := make([][2]string, 0, len(t.toolConfig.RequestTemplate.Headers))
-	for _, header := range t.toolConfig.RequestTemplate.Headers {
+	for i, header := range t.toolConfig.RequestTemplate.Headers {
+		if header.Key == "" {
+			log.Warnf("Skipping header with empty key at index %d", i)
+			continue
+		}
 		tmpl, ok := t.toolConfig.parsedHeaderTemplates[header.Key]
 		if !ok {
 			return fmt.Errorf("header template not found for %s", header.Key)
