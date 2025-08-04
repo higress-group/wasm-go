@@ -127,7 +127,7 @@ type ValidationResult struct {
 The validator reuses the core parsing logic from the main MCP server implementation through dependency injection:
 
 - **parseConfigCore**: Core parsing logic with configurable dependencies
-- **ConfigDependencies**: Dependency injection structure
+- **ConfigOptions**: Dependency config options
 - **SkipPreRegisteredServers**: Flag to skip validation of pre-registered Go servers
 
 This approach ensures:
