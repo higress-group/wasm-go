@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/higress-group/wasm-go/pkg/log"
+	"github.com/higress-group/wasm-go/pkg/mcp/consts"
 )
 
 // ComposedMCPServer represents a server composed of tools from other servers.
@@ -35,7 +36,7 @@ func (cs *ComposedMCPServer) AddMCPTool(name string, tool Tool) Server {
 }
 
 // GetMCPTools constructs and returns the map of tools exposed by this composed server.
-// The tool names are prefixed with their original server name, e.g., "originalServer/toolName".
+// The tool names are prefixed with their original server name, e.g., "${originalServer}HigressRouteTo${toolName}".
 // The Tool instances are DescriptiveTool, only providing Description and InputSchema.
 func (cs *ComposedMCPServer) GetMCPTools() map[string]Tool {
 	composedTools := make(map[string]Tool)
@@ -44,11 +45,11 @@ func (cs *ComposedMCPServer) GetMCPTools() map[string]Tool {
 		for _, originalToolName := range stc.Tools {
 			toolInfo, found := cs.registry.GetToolInfo(originalServerName, originalToolName)
 			if !found {
-				log.Warnf("Tool %s/%s not found in global registry for composed server %s", originalServerName, originalToolName, cs.name)
+				log.Warnf("Tool %s%s%s not found in global registry for composed server %s", originalServerName, consts.ToolSetNameSplitter, originalToolName, cs.name)
 				continue
 			}
 
-			composedToolName := fmt.Sprintf("%s/%s", originalServerName, originalToolName)
+			composedToolName := fmt.Sprintf("%s%s%s", originalServerName, consts.ToolSetNameSplitter, originalToolName)
 			composedTools[composedToolName] = &DescriptiveTool{
 				description: toolInfo.Description,
 				inputSchema: toolInfo.InputSchema,
