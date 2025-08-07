@@ -45,7 +45,7 @@ func (cs *ComposedMCPServer) GetMCPTools() map[string]Tool {
 		for _, originalToolName := range stc.Tools {
 			toolInfo, found := cs.registry.GetToolInfo(originalServerName, originalToolName)
 			if !found {
-				log.Warnf("Tool %s%s%s not found in global registry for composed server %s", originalServerName, consts.ToolSetNameSplitter, originalToolName, cs.name)
+				log.Warnf("Tool %s/%s not found in global registry for composed server %s", originalServerName, originalToolName, cs.name)
 				continue
 			}
 
