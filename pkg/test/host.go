@@ -1,6 +1,7 @@
 package test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/resp"
 )
 
 var (
@@ -65,15 +67,15 @@ func RunTest(t *testing.T, f func(*testing.T)) {
 	t.Helper()
 
 	t.Run("go", func(t *testing.T) {
-		fmt.Println("go test start")
+		t.Log("go mode test start")
 		setTestVMContext(getWasmInitVMContext())
 		f(t)
 		clearTestVMContext()
-		fmt.Println("go test end")
+		t.Log("go mode test end")
 	})
 
 	t.Run("wasm", func(t *testing.T) {
-		fmt.Println("wasm test start")
+		t.Log("wasm mode test start")
 		wasm, err := os.ReadFile("main.wasm")
 		if err != nil {
 			t.Skip("wasm not found")
@@ -84,7 +86,7 @@ func RunTest(t *testing.T, f func(*testing.T)) {
 		setTestVMContext(vm)
 		f(t)
 		clearTestVMContext()
-		fmt.Println("wasm test end")
+		t.Log("wasm mode test end")
 	})
 }
 
@@ -128,8 +130,10 @@ type TestHost interface {
 	CallOnHttpResponseHeaders(headers [][2]string) types.Action
 	// CallOnHttpResponseBody call the onHttpResponseBody method in the wasm plugin.
 	CallOnHttpResponseBody(body []byte) types.Action
-	// CallOnHttpCall call the onHttpCall method in the wasm plugin.
+	// CallOnHttpCall call the proxy_on_http_call_response method in the wasm plugin.
 	CallOnHttpCall(headers [][2]string, body []byte)
+	// CallOnRedisCall call the proxy_on_redis_call_response method in the wasm plugin.
+	CallOnRedisCall(status int32, response []byte)
 	// InitHttpRequest init the http request.
 	InitHttpRequest()
 	// CompleteHttpRequest complete the http request.
@@ -178,7 +182,7 @@ func (h *testHost) Reset() {
 }
 
 // NewTestHost create a new test host with config in json format.
-func NewTestHost(config json.RawMessage) TestHost {
+func NewTestHost(config json.RawMessage) (TestHost, types.OnPluginStartStatus) {
 	// if wasmInitVMContext is not set, set it to the commonVMContext.
 	if getWasmInitVMContext() == nil {
 		setWasmInitVMContext(proxywasm.GetVMContext())
@@ -194,7 +198,7 @@ func NewTestHost(config json.RawMessage) TestHost {
 
 	host, reset := proxytest.NewHostEmulator(opt)
 	// start the plugin.
-	host.StartPlugin()
+	status := host.StartPlugin()
 	// create a new test host with the host emulator and the reset function.
 	testHost := &testHost{
 		HostEmulator: host,
@@ -202,7 +206,7 @@ func NewTestHost(config json.RawMessage) TestHost {
 	}
 	// set the default properties.
 	testHost.setDefaultProperties()
-	return testHost
+	return testHost, status
 }
 
 // setDefaultProperties set the default properties.
@@ -263,11 +267,18 @@ func (h *testHost) CallOnHttpResponseBody(body []byte) types.Action {
 	return action
 }
 
-// CallOnHttpCall call the onHttpCall method in the wasm plugin.
+// CallOnHttpCall call the proxy_on_http_call_response method in the wasm plugin.
 func (h *testHost) CallOnHttpCall(headers [][2]string, body []byte) {
 	attrs := h.HostEmulator.GetCalloutAttributesFromContext(h.currentContextID)
 	calloutID := attrs[0].CalloutID
 	h.HostEmulator.CallOnHttpCallResponse(calloutID, headers, nil, body)
+}
+
+// CallOnRedisCall call the proxy_on_redis_call_response method in the wasm plugin.
+func (h *testHost) CallOnRedisCall(status int32, response []byte) {
+	attrs := h.HostEmulator.GetRedisCalloutAttributesFromContext(h.currentContextID)
+	calloutID := attrs[0].CalloutID
+	h.HostEmulator.CallOnRedisCallResponse(calloutID, status, response)
 }
 
 // SetRouteName set the property route_name with the route name.
@@ -350,4 +361,28 @@ func (h *testHost) GetResponseHeaders() [][2]string {
 // GetLocalResponse get the local response.
 func (h *testHost) GetLocalResponse() *proxytest.LocalHttpResponse {
 	return h.HostEmulator.GetSentLocalResponse(h.currentContextID)
+}
+
+// CreateRedisRespString create the correct RESP format string response.
+func CreateRedisRespString(value string) []byte {
+	var buf bytes.Buffer
+	wr := resp.NewWriter(&buf)
+	wr.WriteString(value)
+	return buf.Bytes()
+}
+
+// CreateRedisRespNull create the correct RESP format null response.
+func CreateRedisRespNull() []byte {
+	var buf bytes.Buffer
+	wr := resp.NewWriter(&buf)
+	wr.WriteNull()
+	return buf.Bytes()
+}
+
+// CreateRedisRespError create the correct RESP format error response.
+func CreateRedisRespError(message string) []byte {
+	var buf bytes.Buffer
+	wr := resp.NewWriter(&buf)
+	wr.WriteError(fmt.Errorf("%s", message))
+	return buf.Bytes()
 }

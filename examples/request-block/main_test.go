@@ -39,7 +39,8 @@ var testConfig = func() json.RawMessage {
 
 func TestParseConfig(t *testing.T) {
 	test.RunGoTest(t, func(t *testing.T) {
-		host := test.NewTestHost(testConfig)
+		host, status := test.NewTestHost(testConfig)
+		require.Equal(t, types.OnPluginStartStatusOK, status)
 		defer host.Reset()
 		config, err := host.GetMatchConfig()
 		require.NoError(t, err)
@@ -62,7 +63,8 @@ func TestParseConfig(t *testing.T) {
 
 func TestBlockUrlByKeyword(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		host := test.NewTestHost(testConfig)
+		host, status := test.NewTestHost(testConfig)
+		require.Equal(t, types.OnPluginStartStatusOK, status)
 		defer host.Reset()
 
 		// Test blocked URL by keyword
@@ -82,7 +84,8 @@ func TestBlockUrlByKeyword(t *testing.T) {
 
 func TestBlockUrlByExactMatch(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		host := test.NewTestHost(testConfig)
+		host, status := test.NewTestHost(testConfig)
+		require.Equal(t, types.OnPluginStartStatusOK, status)
 		defer host.Reset()
 
 		// Test blocked URL by exact match
@@ -102,7 +105,8 @@ func TestBlockUrlByExactMatch(t *testing.T) {
 
 func TestBlockUrlByRegexp(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		host := test.NewTestHost(testConfig)
+		host, status := test.NewTestHost(testConfig)
+		require.Equal(t, types.OnPluginStartStatusOK, status)
 		defer host.Reset()
 
 		// Test blocked URL by regexp
@@ -122,7 +126,8 @@ func TestBlockUrlByRegexp(t *testing.T) {
 
 func TestBlockByHeaders(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		host := test.NewTestHost(testConfig)
+		host, status := test.NewTestHost(testConfig)
+		require.Equal(t, types.OnPluginStartStatusOK, status)
 		defer host.Reset()
 
 		// Test blocked by headers
@@ -144,7 +149,8 @@ func TestBlockByHeaders(t *testing.T) {
 func TestBlockByBody(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		// Use a config that only has body blocking rules
-		host := test.NewTestHost(testConfig)
+		host, status := test.NewTestHost(testConfig)
+		require.Equal(t, types.OnPluginStartStatusOK, status)
 		defer host.Reset()
 
 		// First call headers to set up context - use a path that won't be blocked by URL rules
@@ -168,7 +174,8 @@ func TestBlockByBody(t *testing.T) {
 
 func TestAllowValidRequest(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		host := test.NewTestHost(testConfig)
+		host, status := test.NewTestHost(testConfig)
+		require.Equal(t, types.OnPluginStartStatusOK, status)
 		defer host.Reset()
 
 		// Test valid request should be allowed
@@ -187,7 +194,8 @@ func TestAllowValidRequest(t *testing.T) {
 
 func TestCaseInsensitiveBlocking(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		host := test.NewTestHost(testConfig)
+		host, status := test.NewTestHost(testConfig)
+		require.Equal(t, types.OnPluginStartStatusOK, status)
 		defer host.Reset()
 
 		// Test case insensitive blocking (config has case_sensitive: false)
@@ -216,7 +224,8 @@ func TestCustomBlockedCode(t *testing.T) {
 			return data
 		}()
 
-		host := test.NewTestHost(customConfig)
+		host, status := test.NewTestHost(customConfig)
+		require.Equal(t, types.OnPluginStartStatusOK, status)
 		defer host.Reset()
 
 		action := host.CallOnHttpRequestHeaders([][2]string{
