@@ -39,8 +39,8 @@ func RunGoTest(t *testing.T, f func(*testing.T)) {
 	t.Helper()
 	t.Run("go", func(t *testing.T) {
 		setTestVMContext(getWasmInitVMContext())
+		defer clearTestVMContext()
 		f(t)
-		clearTestVMContext()
 	})
 }
 
@@ -57,8 +57,8 @@ func RunWasmTest(t *testing.T, f func(*testing.T)) {
 		require.NoError(t, err)
 		defer vm.Close()
 		setTestVMContext(vm)
+		defer clearTestVMContext()
 		f(t)
-		clearTestVMContext()
 	})
 }
 
@@ -69,8 +69,8 @@ func RunTest(t *testing.T, f func(*testing.T)) {
 	t.Run("go", func(t *testing.T) {
 		t.Log("go mode test start")
 		setTestVMContext(getWasmInitVMContext())
+		defer clearTestVMContext()
 		f(t)
-		clearTestVMContext()
 		t.Log("go mode test end")
 	})
 
@@ -84,8 +84,8 @@ func RunTest(t *testing.T, f func(*testing.T)) {
 		require.NoError(t, err)
 		defer vm.Close()
 		setTestVMContext(vm)
+		defer clearTestVMContext()
 		f(t)
-		clearTestVMContext()
 		t.Log("wasm mode test end")
 	})
 }
