@@ -126,8 +126,12 @@ type TestHost interface {
 	CallOnHttpRequestHeaders(headers [][2]string) types.Action
 	// CallOnHttpRequestBody call the onHttpRequestBody method in the wasm plugin.
 	CallOnHttpRequestBody(body []byte) types.Action
+	// CallOnHttpStreamingRequestBody call the onHttpRequestBody method in the wasm plugin.
+	CallOnHttpStreamingRequestBody(body []byte, endOfStream bool) types.Action
 	// CallOnHttpResponseHeaders call the onHttpResponseHeaders method in the wasm plugin.
 	CallOnHttpResponseHeaders(headers [][2]string) types.Action
+	// CallOnHttpStreamingResponseBody call the onHttpResponseBody method in the wasm plugin.
+	CallOnHttpStreamingResponseBody(body []byte, endOfStream bool) types.Action
 	// CallOnHttpResponseBody call the onHttpResponseBody method in the wasm plugin.
 	CallOnHttpResponseBody(body []byte) types.Action
 	// CallOnHttpCall call the proxy_on_http_call_response method in the wasm plugin.
@@ -246,6 +250,26 @@ func (h *testHost) CallOnHttpRequestBody(body []byte) types.Action {
 		h.InitHttpRequest()
 	}
 	action := h.HostEmulator.CallOnRequestBody(h.currentContextID, body, true)
+	return action
+}
+
+// CallOnHttpStreamingRequestBody call the onHttpRequestBody method in the wasm plugin.
+// endOfStream is true if the body is the last chunk of the request body.
+func (h *testHost) CallOnHttpStreamingRequestBody(body []byte, endOfStream bool) types.Action {
+	if !h.currentContextValid {
+		h.InitHttpRequest()
+	}
+	action := h.HostEmulator.CallOnRequestBody(h.currentContextID, body, endOfStream)
+	return action
+}
+
+// CallOnHttpStreamingResponseBody call the onHttpResponseBody method in the wasm plugin.
+// endOfStream is true if the body is the last chunk of the response body.
+func (h *testHost) CallOnHttpStreamingResponseBody(body []byte, endOfStream bool) types.Action {
+	if !h.currentContextValid {
+		h.InitHttpRequest()
+	}
+	action := h.HostEmulator.CallOnResponseBody(h.currentContextID, body, endOfStream)
 	return action
 }
 
