@@ -78,7 +78,7 @@ func TestBlockUrlByKeyword(t *testing.T) {
 		require.NotNil(t, localResponse)
 		require.Equal(t, uint32(403), localResponse.StatusCode)
 		require.Equal(t, "Access denied", string(localResponse.Data))
-		host.CompleteHttpRequest()
+		host.CompleteHttp()
 	})
 }
 
@@ -99,7 +99,7 @@ func TestBlockUrlByExactMatch(t *testing.T) {
 		require.NotNil(t, localResponse)
 		require.Equal(t, uint32(403), localResponse.StatusCode)
 		require.Equal(t, "Access denied", string(localResponse.Data))
-		host.CompleteHttpRequest()
+		host.CompleteHttp()
 	})
 }
 
@@ -120,7 +120,7 @@ func TestBlockUrlByRegexp(t *testing.T) {
 		require.NotNil(t, localResponse)
 		require.Equal(t, uint32(403), localResponse.StatusCode)
 		require.Equal(t, "Access denied", string(localResponse.Data))
-		host.CompleteHttpRequest()
+		host.CompleteHttp()
 	})
 }
 
@@ -142,7 +142,7 @@ func TestBlockByHeaders(t *testing.T) {
 		require.NotNil(t, localResponse)
 		require.Equal(t, uint32(403), localResponse.StatusCode)
 		require.Equal(t, "Access denied", string(localResponse.Data))
-		host.CompleteHttpRequest()
+		host.CompleteHttp()
 	})
 }
 
@@ -168,7 +168,7 @@ func TestBlockByBody(t *testing.T) {
 		require.NotNil(t, localResponse)
 		require.Equal(t, uint32(403), localResponse.StatusCode)
 		require.Equal(t, "Access denied", string(localResponse.Data))
-		host.CompleteHttpRequest()
+		host.CompleteHttp()
 	})
 }
 
@@ -188,7 +188,7 @@ func TestAllowValidRequest(t *testing.T) {
 
 		localResponse := host.GetLocalResponse()
 		require.Nil(t, localResponse, "Valid request should not be blocked")
-		host.CompleteHttpRequest()
+		host.CompleteHttp()
 	})
 }
 
@@ -208,7 +208,7 @@ func TestCaseInsensitiveBlocking(t *testing.T) {
 		localResponse := host.GetLocalResponse()
 		require.NotNil(t, localResponse)
 		require.Equal(t, uint32(403), localResponse.StatusCode)
-		host.CompleteHttpRequest()
+		host.CompleteHttp()
 	})
 }
 
@@ -238,7 +238,7 @@ func TestCustomBlockedCode(t *testing.T) {
 		require.NotNil(t, localResponse)
 		require.Equal(t, uint32(429), localResponse.StatusCode)
 		require.Equal(t, "Too many requests", string(localResponse.Data))
-		host.CompleteHttpRequest()
+		host.CompleteHttp()
 	})
 }
 
@@ -362,7 +362,7 @@ func TestOnHttpRequestHeadersErrorHandling(t *testing.T) {
 			localResponse := host.GetLocalResponse()
 			require.Nil(t, localResponse)
 
-			host.CompleteHttpRequest()
+			host.CompleteHttp()
 		})
 
 		// 测试获取头部失败的情况
@@ -389,7 +389,7 @@ func TestOnHttpRequestHeadersErrorHandling(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
 
-			host.CompleteHttpRequest()
+			host.CompleteHttp()
 		})
 
 		// 测试只有block_bodies的情况（应该调用DontReadRequestBody）
@@ -415,7 +415,7 @@ func TestOnHttpRequestHeadersErrorHandling(t *testing.T) {
 			require.Equal(t, types.ActionContinue, action)
 			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
 
-			host.CompleteHttpRequest()
+			host.CompleteHttp()
 		})
 	})
 }
@@ -454,7 +454,7 @@ func TestOnHttpRequestBodyCaseSensitive(t *testing.T) {
 			require.NotNil(t, localResponse)
 			require.Equal(t, uint32(403), localResponse.StatusCode)
 
-			host.CompleteHttpRequest()
+			host.CompleteHttp()
 		})
 
 		// 测试case_sensitive为false的情况（小写内容应该被阻止）
@@ -486,7 +486,7 @@ func TestOnHttpRequestBodyCaseSensitive(t *testing.T) {
 			require.NotNil(t, localResponse)
 			require.Equal(t, uint32(403), localResponse.StatusCode)
 
-			host.CompleteHttpRequest()
+			host.CompleteHttp()
 		})
 	})
 }
@@ -524,7 +524,7 @@ func TestBlockUrlByRegexpEdgeCases(t *testing.T) {
 
 			// 确保请求完成
 			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
-			host.CompleteHttpRequest()
+			host.CompleteHttp()
 		})
 
 		// 测试不匹配的正则表达式
@@ -556,7 +556,7 @@ func TestBlockUrlByRegexpEdgeCases(t *testing.T) {
 
 			// 确保请求完成
 			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
-			host.CompleteHttpRequest()
+			host.CompleteHttp()
 		})
 	})
 }

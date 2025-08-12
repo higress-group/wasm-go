@@ -1,10 +1,8 @@
 package test
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"reflect"
 	"sync"
@@ -14,7 +12,6 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/stretchr/testify/require"
-	"github.com/tidwall/resp"
 )
 
 var (
@@ -138,10 +135,10 @@ type TestHost interface {
 	CallOnHttpCall(headers [][2]string, body []byte)
 	// CallOnRedisCall call the proxy_on_redis_call_response method in the wasm plugin.
 	CallOnRedisCall(status int32, response []byte)
-	// InitHttpRequest init the http request.
-	InitHttpRequest()
-	// CompleteHttpRequest complete the http request.
-	CompleteHttpRequest()
+	// InitHttp init the http context which executes types.PluginContext.NewHttpContext in the plugin.
+	InitHttp()
+	// CompleteHttpRequest complete the http context which executes types.HttpContext.OnHttpStreamDone in the plugin.
+	CompleteHttp()
 	// SetRouteName set the property route_name with the route name.
 	SetRouteName(routeName string) error
 	// SetClusterName set the property cluster_name with the cluster name.
@@ -223,14 +220,14 @@ func (h *testHost) setDefaultProperties() {
 }
 
 // InitHttpRequest initialize the http request and set the currentContextID and currentContextValid.
-func (h *testHost) InitHttpRequest() {
+func (h *testHost) InitHttp() {
 	contextID := h.HostEmulator.InitializeHttpContext()
 	h.currentContextID = contextID
 	h.currentContextValid = true
 }
 
 // CompleteHttpRequest complete the http request and set the currentContextValid to false.
-func (h *testHost) CompleteHttpRequest() {
+func (h *testHost) CompleteHttp() {
 	h.HostEmulator.CompleteHttpContext(h.currentContextID)
 	h.currentContextValid = false
 }
@@ -238,7 +235,7 @@ func (h *testHost) CompleteHttpRequest() {
 // CallOnHttpRequestHeaders call the onHttpRequestHeaders method in the wasm plugin.
 func (h *testHost) CallOnHttpRequestHeaders(headers [][2]string) types.Action {
 	if !h.currentContextValid {
-		h.InitHttpRequest()
+		h.InitHttp()
 	}
 	action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, headers, false)
 	return action
@@ -247,7 +244,7 @@ func (h *testHost) CallOnHttpRequestHeaders(headers [][2]string) types.Action {
 // CallOnHttpRequestBody call the onHttpRequestBody method in the wasm plugin.
 func (h *testHost) CallOnHttpRequestBody(body []byte) types.Action {
 	if !h.currentContextValid {
-		h.InitHttpRequest()
+		h.InitHttp()
 	}
 	action := h.HostEmulator.CallOnRequestBody(h.currentContextID, body, true)
 	return action
@@ -257,7 +254,7 @@ func (h *testHost) CallOnHttpRequestBody(body []byte) types.Action {
 // endOfStream is true if the body is the last chunk of the request body.
 func (h *testHost) CallOnHttpStreamingRequestBody(body []byte, endOfStream bool) types.Action {
 	if !h.currentContextValid {
-		h.InitHttpRequest()
+		h.InitHttp()
 	}
 	action := h.HostEmulator.CallOnRequestBody(h.currentContextID, body, endOfStream)
 	return action
@@ -267,7 +264,11 @@ func (h *testHost) CallOnHttpStreamingRequestBody(body []byte, endOfStream bool)
 // endOfStream is true if the body is the last chunk of the response body.
 func (h *testHost) CallOnHttpStreamingResponseBody(body []byte, endOfStream bool) types.Action {
 	if !h.currentContextValid {
-		h.InitHttpRequest()
+		h.InitHttp()
+		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestHostName}}, false)
+		if action != types.ActionContinue {
+			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
+		}
 	}
 	action := h.HostEmulator.CallOnResponseBody(h.currentContextID, body, endOfStream)
 	return action
@@ -276,7 +277,11 @@ func (h *testHost) CallOnHttpStreamingResponseBody(body []byte, endOfStream bool
 // CallOnHttpResponseHeaders call the onHttpResponseHeaders method in the wasm plugin.
 func (h *testHost) CallOnHttpResponseHeaders(headers [][2]string) types.Action {
 	if !h.currentContextValid {
-		h.InitHttpRequest()
+		h.InitHttp()
+		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestHostName}}, false)
+		if action != types.ActionContinue {
+			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
+		}
 	}
 	action := h.HostEmulator.CallOnResponseHeaders(h.currentContextID, headers, false)
 	return action
@@ -285,7 +290,11 @@ func (h *testHost) CallOnHttpResponseHeaders(headers [][2]string) types.Action {
 // CallOnHttpResponseBody call the onHttpResponseBody method in the wasm plugin.
 func (h *testHost) CallOnHttpResponseBody(body []byte) types.Action {
 	if !h.currentContextValid {
-		h.InitHttpRequest()
+		h.InitHttp()
+		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestHostName}}, false)
+		if action != types.ActionContinue {
+			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
+		}
 	}
 	action := h.HostEmulator.CallOnResponseBody(h.currentContextID, body, true)
 	return action
@@ -385,28 +394,4 @@ func (h *testHost) GetResponseHeaders() [][2]string {
 // GetLocalResponse get the local response.
 func (h *testHost) GetLocalResponse() *proxytest.LocalHttpResponse {
 	return h.HostEmulator.GetSentLocalResponse(h.currentContextID)
-}
-
-// CreateRedisRespString create the correct RESP format string response.
-func CreateRedisRespString(value string) []byte {
-	var buf bytes.Buffer
-	wr := resp.NewWriter(&buf)
-	wr.WriteString(value)
-	return buf.Bytes()
-}
-
-// CreateRedisRespNull create the correct RESP format null response.
-func CreateRedisRespNull() []byte {
-	var buf bytes.Buffer
-	wr := resp.NewWriter(&buf)
-	wr.WriteNull()
-	return buf.Bytes()
-}
-
-// CreateRedisRespError create the correct RESP format error response.
-func CreateRedisRespError(message string) []byte {
-	var buf bytes.Buffer
-	wr := resp.NewWriter(&buf)
-	wr.WriteError(fmt.Errorf("%s", message))
-	return buf.Bytes()
 }
