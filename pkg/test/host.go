@@ -245,6 +245,10 @@ func (h *testHost) CallOnHttpRequestHeaders(headers [][2]string) types.Action {
 func (h *testHost) CallOnHttpRequestBody(body []byte) types.Action {
 	if !h.currentContextValid {
 		h.InitHttp()
+		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestHostName}}, false)
+		if action != types.ActionContinue {
+			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
+		}
 	}
 	action := h.HostEmulator.CallOnRequestBody(h.currentContextID, body, true)
 	return action
@@ -255,6 +259,10 @@ func (h *testHost) CallOnHttpRequestBody(body []byte) types.Action {
 func (h *testHost) CallOnHttpStreamingRequestBody(body []byte, endOfStream bool) types.Action {
 	if !h.currentContextValid {
 		h.InitHttp()
+		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestHostName}}, false)
+		if action != types.ActionContinue {
+			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
+		}
 	}
 	action := h.HostEmulator.CallOnRequestBody(h.currentContextID, body, endOfStream)
 	return action
