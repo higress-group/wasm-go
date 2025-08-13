@@ -114,23 +114,8 @@ func GetTokenUsage(ctx wrapper.HttpContext, body []byte) TokenUsage {
 		// the feature strings are used to identify the usage data, like:
 		// {"model":"gpt2","usage":{"prompt_tokens":1,"completion_tokens":1}}
 
-		// openai /v1/responses
-		if bytes.Contains(chunk, []byte(`"response.completed"`)) && !bytes.Contains(chunk, []byte(`"usage"`)) {
-			ctx.SetContext(ctxKeyDeltaBeginning, true)
-		}
-
-		if ctx.GetBoolContext(ctxKeyDeltaBeginning, false) {
-			// end of streaming
-			if len(bytes.TrimSpace(body)) == 0 {
-				ctx.SetContext(ctxKeyDeltaBeginning, false)
-				chunk = ctx.GetByteSliceContext(ctxKeyDeltaSSEMessage, chunk)
-				ctx.SetContext(ctxKeyDeltaSSEMessage, nil)
-			} else {
-				deltaMessage := ctx.GetByteSliceContext(ctxKeyDeltaSSEMessage, []byte{})
-				deltaMessage = append(deltaMessage, chunk...)
-				ctx.SetContext(ctxKeyDeltaSSEMessage, deltaMessage)
-			}
-		}
+		// openai/v1/responses
+		chunk = mergeLargeResponseAPIChunks(ctx, chunk)
 
 		if !bytes.Contains(chunk, []byte(`"usage"`)) && !bytes.Contains(chunk, []byte(`"usageMetadata"`)) {
 			continue
@@ -144,6 +129,27 @@ func GetTokenUsage(ctx wrapper.HttpContext, body []byte) TokenUsage {
 		ExtractTotalTokens(ctx, chunk, &u)
 	}
 	return u
+}
+
+func mergeLargeResponseAPIChunks(ctx wrapper.HttpContext, chunk []byte) []byte {
+	if bytes.Contains(chunk, []byte(`"response.completed"`)) && !bytes.Contains(chunk, []byte(`"usage"`)) {
+		ctx.SetContext(ctxKeyDeltaBeginning, true)
+	}
+
+	if ctx.GetBoolContext(ctxKeyDeltaBeginning, false) {
+		// end of streaming
+		if len(bytes.TrimSpace(chunk)) == 0 {
+			ctx.SetContext(ctxKeyDeltaBeginning, false)
+			chunk = ctx.GetByteSliceContext(ctxKeyDeltaSSEMessage, chunk)
+			ctx.SetContext(ctxKeyDeltaSSEMessage, nil)
+		} else {
+			deltaMessage := ctx.GetByteSliceContext(ctxKeyDeltaSSEMessage, []byte{})
+			deltaMessage = append(deltaMessage, chunk...)
+			ctx.SetContext(ctxKeyDeltaSSEMessage, deltaMessage)
+		}
+	}
+
+	return chunk
 }
 
 func ExtractModel(ctx wrapper.HttpContext, body []byte, u *TokenUsage) {
