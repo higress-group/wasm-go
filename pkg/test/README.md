@@ -2,6 +2,9 @@
 
 The `pkg/test` directory provides a unit testing framework for the wasm-go project, helping plugin developers write and run high-quality unit tests.
 
+![Test Framework Architecture](https://gw.alicdn.com/imgextra/i2/O1CN01EIcQgu1TC3rEP9DfT_!!6000000002345-2-tps-1859-547.png)
+
+
 ## Framework Structure
 
 - **`host.go`** - Provides `TestHost` interface to simulate host(envoy) behavior
@@ -186,22 +189,41 @@ func TestStreamingRequest(t *testing.T) {
 ### Plugin Configuration Test Example
 
 ```go
+var testConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		// Global config - applies to all requests when no specific rule matches
+		"name": "john",
+		// Rules for specific route matching
+		"_rules_": []map[string]interface{}{
+			{
+				"_match_route_": []string{"foo"}, // route level config
+				"name": "foo",
+			},
+            {
+                "_match_domain_": []string{"foo.bar.com"}, // domain level config
+                "name": "foo.bar.com",
+            }
+		},
+	})
+	return data
+}()
+
 func TestParseConfig(t *testing.T) {
     test.RunGoTest(t, func(t *testing.T) {
         host, status := test.NewTestHost(testConfig)
         require.Equal(t, types.OnPluginStartStatusOK, status)
         defer host.Reset()
 
-        // Get plugin configuration
+        // Get global plugin configuration
         config, err := host.GetMatchConfig()
-
         // Get plugin configuration with match host
-        config, err := host.GetMatchConfigWithHost("foo.bar.com")
-
-        // Get plugin configuration with match route or service 
-        host.SetRouteName("route1")
-        host.SetClusterName("cluster1")
-        config, err := host.GetMatchConfig()
+        config, err = host.GetMatchConfigWithDomain("foo.bar.com")
+        // Get plugin configuration with match route
+        host.SetRouteName("foo")
+        config, err = host.GetMatchConfig()
+        // Get plugin configuration with match route
+        host.SetClusterName("service")
+        config, err = host.GetMatchConfig()
 
         // Verify configuration content
         // ... Your configuration validation logic
@@ -237,6 +259,7 @@ func TestParseConfig(t *testing.T) {
 2. **State Cleanup**: Use `defer host.Reset()` to ensure test state is properly cleaned up
 3. **Error Handling**: Tests should verify the plugin's error handling logic
 4. **Performance Considerations**: Avoid creating too many objects or performing time-consuming operations in tests
+5. **HTTP Request Lifecycle**: If plugin implementing custom `onHttp*` methods, follow the proper request lifecycle in test. Do not skip intermediate steps - if you implement `onHttpRequestHeader`, do not directly call `onHttpRequestBody`.
 
 ## Related Resources
 

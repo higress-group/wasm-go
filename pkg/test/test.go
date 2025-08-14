@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	// defaultTestHostName is the default host name for the test host.
-	defaultTestHostName = "test.com"
+	// defaultTestDomain is the default host name for the test host.
+	defaultTestDomain = "default.test.com"
 	// CommonVmCtx is init in wasm plugin by wrapper.SetCtx() once
 	// wasmInitVMContext store the init CommonVmCtx for each go mode unit test
 	wasmInitVMContext types.VMContext

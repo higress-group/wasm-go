@@ -45,7 +45,7 @@ type TestHost interface {
 	// GetMatchConfig get the match config with default host name.
 	GetMatchConfig() (any, error)
 	// GetMatchConfigWithHost get the match config with the host name.
-	GetMatchConfigWithHost(hostName string) (any, error)
+	GetMatchConfigWithDomain(domain string) (any, error)
 	// GetHttpStreamAction get the http stream action.
 	GetHttpStreamAction() types.Action
 	// GetRequestHeaders get the request headers.
@@ -142,7 +142,7 @@ func (h *testHost) CallOnHttpRequestHeaders(headers [][2]string) types.Action {
 func (h *testHost) CallOnHttpRequestBody(body []byte) types.Action {
 	if !h.currentContextValid {
 		h.InitHttp()
-		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestHostName}}, false)
+		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestDomain}}, false)
 		if action != types.ActionContinue {
 			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
 		}
@@ -156,7 +156,7 @@ func (h *testHost) CallOnHttpRequestBody(body []byte) types.Action {
 func (h *testHost) CallOnHttpStreamingRequestBody(body []byte, endOfStream bool) types.Action {
 	if !h.currentContextValid {
 		h.InitHttp()
-		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestHostName}}, false)
+		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestDomain}}, false)
 		if action != types.ActionContinue {
 			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
 		}
@@ -170,7 +170,7 @@ func (h *testHost) CallOnHttpStreamingRequestBody(body []byte, endOfStream bool)
 func (h *testHost) CallOnHttpStreamingResponseBody(body []byte, endOfStream bool) types.Action {
 	if !h.currentContextValid {
 		h.InitHttp()
-		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestHostName}}, false)
+		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestDomain}}, false)
 		if action != types.ActionContinue {
 			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
 		}
@@ -183,7 +183,7 @@ func (h *testHost) CallOnHttpStreamingResponseBody(body []byte, endOfStream bool
 func (h *testHost) CallOnHttpResponseHeaders(headers [][2]string) types.Action {
 	if !h.currentContextValid {
 		h.InitHttp()
-		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestHostName}}, false)
+		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestDomain}}, false)
 		if action != types.ActionContinue {
 			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
 		}
@@ -196,7 +196,7 @@ func (h *testHost) CallOnHttpResponseHeaders(headers [][2]string) types.Action {
 func (h *testHost) CallOnHttpResponseBody(body []byte) types.Action {
 	if !h.currentContextValid {
 		h.InitHttp()
-		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestHostName}}, false)
+		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestDomain}}, false)
 		if action != types.ActionContinue {
 			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
 		}
@@ -236,19 +236,19 @@ func (h *testHost) SetRequestId(requestId string) error {
 
 // Set host name to defaultTestHostName if not provided, to make sure match config is not empty
 func (h *testHost) GetMatchConfig() (any, error) {
-	return h.GetMatchConfigWithHost(defaultTestHostName)
+	return h.GetMatchConfigWithDomain(defaultTestDomain)
 }
 
-// GetMatchConfigWithHost get the match config with the host name.
+// GetMatchConfigWithDomain get the match config with domain.
 // GetMatchConfig depends on reflect feature so it can only be used in go mode.
 // return config type is any, so unitTest needs to cast the config to the actual type.
-func (h *testHost) GetMatchConfigWithHost(hostName string) (any, error) {
-	if hostName == "" {
-		return nil, errors.New("host name is empty")
+func (h *testHost) GetMatchConfigWithDomain(domain string) (any, error) {
+	if domain == "" {
+		return nil, errors.New("domain is empty")
 	}
 	contextID := h.HostEmulator.InitializeHttpContext()
 
-	h.HostEmulator.SetHttpRequestHeaders(contextID, [][2]string{{":authority", hostName}})
+	h.HostEmulator.SetHttpRequestHeaders(contextID, [][2]string{{":authority", domain}})
 
 	httpContext := proxywasm.GetHttpContext(contextID)
 	h.HostEmulator.CompleteHttpContext(contextID)
