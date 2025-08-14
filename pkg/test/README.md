@@ -2,7 +2,7 @@
 
 The `pkg/test` directory provides a unit testing framework for the wasm-go project, helping plugin developers write and run high-quality unit tests.
 
-![Test Framework Architecture](https://gw.alicdn.com/imgextra/i2/O1CN01EIcQgu1TC3rEP9DfT_!!6000000002345-2-tps-1859-547.png)
+![Test Framework Architecture](https://img.alicdn.com/imgextra/i3/O1CN01uK1Whg1YmJHaiquKG_!!6000000003101-2-tps-1859-547.png)
 
 
 ## Framework Structure
