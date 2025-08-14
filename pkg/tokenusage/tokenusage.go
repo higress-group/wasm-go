@@ -86,6 +86,9 @@ const (
 
 	OutputTokenDetailsKeyDoubaoGeneratedImages    = "generated_images"
 	OutputTokenDetailsKeyGeminiThoughtsTokenCount = "thoughts_token_count"
+
+	ctxKeyDeltaSSEMessage = "delta_sse_message"
+	ctxKeyDeltaBeginning  = "delta_beginning"
 )
 
 type TokenUsage struct {
@@ -102,7 +105,7 @@ type TokenUsage struct {
 }
 
 func GetTokenUsage(ctx wrapper.HttpContext, body []byte) TokenUsage {
-	chunks := bytes.SplitSeq(bytes.TrimSpace(wrapper.UnifySSEChunk(body)), []byte("\n\n"))
+	chunks := bytes.SplitSeq(wrapper.UnifySSEChunk(body), []byte("\n\n"))
 	u := TokenUsage{
 		InputTokenDetails:  make(map[string]int64),
 		OutputTokenDetails: make(map[string]int64),
@@ -110,6 +113,9 @@ func GetTokenUsage(ctx wrapper.HttpContext, body []byte) TokenUsage {
 	for chunk := range chunks {
 		// the feature strings are used to identify the usage data, like:
 		// {"model":"gpt2","usage":{"prompt_tokens":1,"completion_tokens":1}}
+
+		// openai/v1/responses
+		chunk = mergeLargeResponseAPIChunks(ctx, chunk)
 
 		if !bytes.Contains(chunk, []byte(`"usage"`)) && !bytes.Contains(chunk, []byte(`"usageMetadata"`)) {
 			continue
@@ -123,6 +129,27 @@ func GetTokenUsage(ctx wrapper.HttpContext, body []byte) TokenUsage {
 		ExtractTotalTokens(ctx, chunk, &u)
 	}
 	return u
+}
+
+func mergeLargeResponseAPIChunks(ctx wrapper.HttpContext, chunk []byte) []byte {
+	if bytes.Contains(chunk, []byte(`"response.completed"`)) && !bytes.Contains(chunk, []byte(`"usage"`)) {
+		ctx.SetContext(ctxKeyDeltaBeginning, true)
+	}
+
+	if ctx.GetBoolContext(ctxKeyDeltaBeginning, false) {
+		// end of streaming
+		if len(bytes.TrimSpace(chunk)) == 0 {
+			ctx.SetContext(ctxKeyDeltaBeginning, false)
+			chunk = ctx.GetByteSliceContext(ctxKeyDeltaSSEMessage, chunk)
+			ctx.SetContext(ctxKeyDeltaSSEMessage, nil)
+		} else {
+			deltaMessage := ctx.GetByteSliceContext(ctxKeyDeltaSSEMessage, []byte{})
+			deltaMessage = append(deltaMessage, chunk...)
+			ctx.SetContext(ctxKeyDeltaSSEMessage, deltaMessage)
+		}
+	}
+
+	return chunk
 }
 
 func ExtractModel(ctx wrapper.HttpContext, body []byte, u *TokenUsage) {
