@@ -11,6 +11,7 @@ The `pkg/test` directory provides a unit testing framework for the wasm-go proje
 - **`host.go`** - Provides `TestHost` interface to simulate host(envoy) behavior
 - **`redis.go`** - Provides Redis response building utility functions
 - **`test.go`** - Provides test runners supporting both Go mode and Wasm mode
+- **`utils.go`** - Provides utility functions for header testing
 
 ## Core Features
 
@@ -116,6 +117,15 @@ defer host.Reset()
 - `CreateRedisRespFloat(value float64) []byte` - Create float response
 - `CreateRedisRespNull() []byte` - Create null response
 - `CreateRedisRespError(message string) []byte` - Create error response
+
+### 4. Header Utility Functions (`utils.go`)
+
+#### Header Checking Functions
+- `HasHeader(headers [][2]string, headerName string) bool` - Check if headers contain a header with the specified name (case-insensitive)
+- `GetHeaderValue(headers [][2]string, headerName string) (string, bool)` - Get the value of the specified header, returns value and found status (case-insensitive)
+- `HasHeaderWithValue(headers [][2]string, headerName, expectedValue string) bool` - Check if headers contain a header with the specified name and value (case-insensitive)
+
+These utility functions are particularly useful for testing HTTP header processing in your wasm plugins. They provide case-insensitive header matching, which is important for HTTP compliance.
 
 ## Usage Examples
 
