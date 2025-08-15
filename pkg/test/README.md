@@ -2,7 +2,7 @@
 
 The `pkg/test` directory provides a unit testing framework for the wasm-go project, helping plugin developers write and run high-quality unit tests. The framework supports running tests in both Go mode and Wasm mode. 
 
-![Test Framework Architecture](https://img.alicdn.com/imgextra/i3/O1CN01uK1Whg1YmJHaiquKG_!!6000000003101-2-tps-1859-547.png)
+![Test Framework Architecture](https://img.alicdn.com/imgextra/i1/O1CN01wJ1Vgk1v9axtimgJT_!!6000000006130-2-tps-1859-547.png)
 > Running test with the compiled wasm binary helps to ensure that the plugin will run when actually compiled to wasm, however stack traces and other debug features will be much worse. It is recommended to run unit tests both with Go and with wasm. Tests will run much faster under Go mode for quicker development cycles, and the wasm mode test can confirm the behavior matches when actually compiled.
 
 
@@ -27,7 +27,7 @@ func TestMyPlugin(t *testing.T) {
 }
 ```
 
-**Note**: To run wasm mode tests, you need to compile `main.wasm`(otherwise it will skip) in your plugin directory using:
+**Note**: To run tests in wasm mode, you need to compile `main.wasm`in your plugin directory(otherwise it will skip wasm mode).
 ```bash
 GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o main.wasm ./
 ```
