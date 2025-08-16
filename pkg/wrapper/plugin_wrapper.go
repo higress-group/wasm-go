@@ -107,6 +107,10 @@ var globalOnTickFuncs []TickFuncEntry = []TickFuncEntry{}
 //		 wrapper.RegisterTickFunc(3000, func() { proxywasm.LogInfo("onTick 3s") })
 //		 return nil
 //	}
+func RegisteTickFunc(tickPeriod int64, tickFunc func()) {
+	RegisterTickFunc(tickPeriod, tickFunc)
+}
+
 func RegisterTickFunc(tickPeriod int64, tickFunc func()) {
 	globalOnTickFuncs = append(globalOnTickFuncs, TickFuncEntry{0, tickPeriod, tickFunc})
 }
