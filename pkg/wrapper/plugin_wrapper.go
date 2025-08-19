@@ -794,11 +794,11 @@ func (ctx *CommonHttpCtx[PluginConfig]) Method() string {
 	return GetRequestMethod()
 }
 
-func (ctx *CommonHttpCtx[PluginConfig]) DontReadRequestBody() {
+func (ctx *CommonHttpCtx[PluginConfig]) DonotReadRequestBody() {
 	ctx.needRequestBody = false
 }
 
-func (ctx *CommonHttpCtx[PluginConfig]) DontReadResponseBody() {
+func (ctx *CommonHttpCtx[PluginConfig]) DonotReadResponseBody() {
 	ctx.needResponseBody = false
 }
 
@@ -1013,12 +1013,12 @@ func (ctx *CommonHttpCtx[PluginConfig]) RouteCall(method, rawURL string, headers
 		callback(statusCode, responseHeaders, responseBody)
 		log.Infof("route call end, id:%s, code:%d, headers:%#v, body:%s", requestID, statusCode, responseHeaders, strings.ReplaceAll(string(responseBody), "\n", `\n`))
 	}
-	orignalMethod, _ := proxywasm.GetHttpRequestHeader(":method")
-	orignalPath, _ := proxywasm.GetHttpRequestHeader(":path")
-	orignalHost, _ := proxywasm.GetHttpRequestHeader(":authority")
-	proxywasm.ReplaceHttpRequestHeader("x-envoy-original-method", orignalMethod)
-	proxywasm.ReplaceHttpRequestHeader("x-envoy-original-path", orignalPath)
-	proxywasm.ReplaceHttpRequestHeader("x-envoy-original-host", orignalHost)
+	originalMethod, _ := proxywasm.GetHttpRequestHeader(":method")
+	originalPath, _ := proxywasm.GetHttpRequestHeader(":path")
+	originalHost, _ := proxywasm.GetHttpRequestHeader(":authority")
+	proxywasm.ReplaceHttpRequestHeader("x-envoy-original-method", originalMethod)
+	proxywasm.ReplaceHttpRequestHeader("x-envoy-original-path", originalPath)
+	proxywasm.ReplaceHttpRequestHeader("x-envoy-original-host", originalHost)
 
 	proxywasm.ReplaceHttpRequestHeader(":method", method)
 	parsedURL, err := url.Parse(rawURL)
