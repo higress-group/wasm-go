@@ -112,14 +112,17 @@ func HasRequestBody() bool {
 	transferEncodingStr, _ := proxywasm.GetHttpRequestHeader("transfer-encoding")
 	proxywasm.LogDebugf("check has request body: contentType:%s, contentLengthStr:%s, transferEncodingStr:%s",
 		contentTypeStr, contentLengthStr, transferEncodingStr)
-	if contentTypeStr != "" {
-		return true
-	}
 	if contentLengthStr != "" {
 		contentLength, err := strconv.Atoi(contentLengthStr)
-		if err == nil && contentLength > 0 {
+		if err == nil {
+			if contentLength == 0 {
+				return false
+			}
 			return true
 		}
+	}
+	if contentTypeStr != "" {
+		return true
 	}
 	return strings.Contains(transferEncodingStr, "chunked")
 }
@@ -135,14 +138,17 @@ func HasResponseBody() bool {
 	transferEncodingStr, _ := proxywasm.GetHttpResponseHeader("transfer-encoding")
 	proxywasm.LogDebugf("check has request body: contentType:%s, contentLengthStr:%s, transferEncodingStr:%s",
 		contentTypeStr, contentLengthStr, transferEncodingStr)
-	if contentTypeStr != "" {
-		return true
-	}
 	if contentLengthStr != "" {
 		contentLength, err := strconv.Atoi(contentLengthStr)
-		if err == nil && contentLength > 0 {
+		if err == nil {
+			if contentLength == 0 {
+				return false
+			}
 			return true
 		}
+	}
+	if contentTypeStr != "" {
+		return true
 	}
 	return strings.Contains(transferEncodingStr, "chunked")
 }
