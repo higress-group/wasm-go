@@ -36,7 +36,7 @@ func (cs *ComposedMCPServer) AddMCPTool(name string, tool Tool) Server {
 }
 
 // GetMCPTools constructs and returns the map of tools exposed by this composed server.
-// The tool names are prefixed with their original server name, e.g., "${originalServer}HigressRouteTo${toolName}".
+// The tool names are prefixed with their original server name, e.g., "${originalServer}___${toolName}".
 // The Tool instances are DescriptiveTool, only providing Description and InputSchema.
 func (cs *ComposedMCPServer) GetMCPTools() map[string]Tool {
 	composedTools := make(map[string]Tool)

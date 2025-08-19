@@ -15,5 +15,5 @@
 package consts
 
 const (
-	ToolSetNameSplitter = "HigressRouteTo"
+	ToolSetNameSplitter = "___"
 )
