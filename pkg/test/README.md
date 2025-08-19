@@ -12,7 +12,7 @@ The `pkg/test` directory provides a unit testing framework for the wasm-go proje
 - **`redis.go`** - Provides Redis response building utility functions
 - **`test.go`** - Provides test runners supporting both Go mode and Wasm mode
 - **`utils.go`** - Provides utility functions for header testing
-
+- 
 ## Core Features
 
 ### 1. Test Runners (`test.go`)
@@ -28,15 +28,32 @@ func TestMyPlugin(t *testing.T) {
 }
 ```
 
-**Note**: To run tests in wasm mode, you need to compile `main.wasm`in your plugin directory(otherwise it will skip wasm mode).
-```bash
-GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o main.wasm ./
-```
+#### `RunTestWithPath(t *testing.T, wasmPath string, f func(*testing.T))`
+Runs tests in both Go mode and Wasm mode with a specified wasm file path. This function allows callers to specify custom wasm file paths for testing.
+
 #### `RunGoTest(t *testing.T, f func(*testing.T))`
 Runs tests only in Go mode using ABI host call mock interfaces.
 
 #### `RunWasmTest(t *testing.T, f func(*testing.T))`
-Runs tests only in Wasm mode using the compiled wasm binary in wazero runtime.
+Runs tests only in Wasm mode using intelligent wasm file path detection in wazero runtime.
+
+#### `RunWasmTestWithPath(t *testing.T, wasmPath string, f func(*testing.T))`
+Runs tests only in Wasm mode with a specified wasm file path. This function allows callers to specify custom wasm file paths for testing.
+
+**Note**: To run tests in wasm mode, you need to compile a wasm binary. The framework supports multiple ways to specify the wasm file path:
+
+1. **Environment Variable**: Set `WASM_FILE_PATH` environment variable
+2. **Custom Path**: Use `RunWasmTestWithPath()` or `RunTestWithPath()` functions
+3. **Auto-detection**: The framework automatically detects common wasm file locations
+
+```bash
+# Compile wasm binary
+GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o main.wasm ./
+
+# Or specify custom path via environment variable
+export WASM_FILE_PATH="build/plugin.wasm"
+go test ./...
+```
 
 ### 2. Test Host Simulation (`host.go`)
 
@@ -253,6 +270,7 @@ func TestParseConfig(t *testing.T) {
 - Use `RunTest()` to ensure the plugin works in both modes
 - Use `RunGoTest()` for rapid iteration during development
 - Always use `RunWasmTest()` before release to verify compiled behavior
+- Use `RunTestWithPath()` or `RunWasmTestWithPath()` when you need to specify custom wasm file paths
 
 ### 2. Resource Management
 - Always use `defer host.Reset()` to clean up test state
@@ -268,6 +286,11 @@ func TestParseConfig(t *testing.T) {
 - Test boundary conditions and error cases
 - Simulate real network environments
 
+### 5. Wasm File Path Management
+- Use environment variable `WASM_FILE_PATH` for consistent configuration across different environments
+- Leverage intelligent path detection for common project structures
+- Use `RunTestWithPath()` or `RunWasmTestWithPath()` for project-specific wasm file locations
+
 ## Important Notes
 
 1. **Test Isolation**: Each test case should use an independent test host instance
@@ -275,6 +298,7 @@ func TestParseConfig(t *testing.T) {
 3. **Error Handling**: Tests should verify the plugin's error handling logic
 4. **Performance Considerations**: Avoid creating too many objects or performing time-consuming operations in tests
 5. **HTTP Request Lifecycle**: If plugin implementing custom `onHttp*` methods, follow the proper request lifecycle in test. Do not skip intermediate steps - if you implement `onHttpRequestHeader`, do not directly call `onHttpRequestBody`.
+6. **Wasm File Path**: The framework automatically detects wasm files in common locations. For custom paths, use environment variables or explicit path functions to ensure consistent test execution across different environments.
 
 ## Related Resources
 

@@ -1,6 +1,7 @@
 package test
 
 import (
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -26,6 +27,33 @@ var (
 	testMutex = &sync.Mutex{}
 )
 
+// getDefaultWasmPath returns the default wasm file path, supporting both environment variable
+// and intelligent path detection
+func getDefaultWasmPath() string {
+	// Priority 1: Environment variable
+	if path := os.Getenv("WASM_FILE_PATH"); path != "" {
+		fmt.Printf("[WASM_PATH] Using environment variable WASM_FILE_PATH: %s\n", path)
+		return path
+	}
+
+	// Priority 2: Intelligent path detection
+	possiblePaths := []string{
+		"main.wasm",
+		"plugin.wasm",
+	}
+
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			fmt.Printf("[WASM_PATH] Found wasm file at: %s\n", path)
+			return path
+		}
+	}
+
+	// Priority 3: Default fallback
+	fmt.Printf("[WASM_PATH] No wasm file found, using default path: main.wasm\n")
+	return "main.wasm"
+}
+
 // RunGoTest run the test in go mode, and the testVMContext will be set to the wasmInitVMContext.
 // Run unit test in go mode using interface in abi_hostcalls_mock.go in proxy-wasm-go-sdk
 func RunGoTest(t *testing.T, f func(*testing.T)) {
@@ -37,14 +65,14 @@ func RunGoTest(t *testing.T, f func(*testing.T)) {
 	})
 }
 
-// RunWasmTest run the test in wasm mode, and the testVMContext will be set to the WasmVMContext.
-// Run unit test with the compiled wasm binary helps to ensure that the plugin will run when actually compiled to wasm.
-func RunWasmTest(t *testing.T, f func(*testing.T)) {
+// RunWasmTestWithPath run the test in wasm mode with a specified wasm file path.
+// This function allows callers to specify custom wasm file paths for testing.
+func RunWasmTestWithPath(t *testing.T, wasmPath string, f func(*testing.T)) {
 	t.Helper()
 	t.Run("wasm", func(t *testing.T) {
-		wasm, err := os.ReadFile("main.wasm")
+		wasm, err := os.ReadFile(wasmPath)
 		if err != nil {
-			t.Skip("wasm not found")
+			t.Skipf("wasm file not found at path: %s", wasmPath)
 		}
 		vm, err := proxytest.NewWasmVMContext(wasm)
 		require.NoError(t, err)
@@ -55,8 +83,15 @@ func RunWasmTest(t *testing.T, f func(*testing.T)) {
 	})
 }
 
-// Run unit test both in go and wasm mode.
-func RunTest(t *testing.T, f func(*testing.T)) {
+// RunWasmTest run the test in wasm mode, and the testVMContext will be set to the WasmVMContext.
+// Run unit test with the compiled wasm binary helps to ensure that the plugin will run when actually compiled to wasm.
+// This function maintains backward compatibility and uses intelligent path detection.
+func RunWasmTest(t *testing.T, f func(*testing.T)) {
+	RunWasmTestWithPath(t, getDefaultWasmPath(), f)
+}
+
+// RunTestWithPath run the test both in go and wasm mode with a specified wasm file path.
+func RunTestWithPath(t *testing.T, wasmPath string, f func(*testing.T)) {
 	t.Helper()
 
 	t.Run("go", func(t *testing.T) {
@@ -69,9 +104,9 @@ func RunTest(t *testing.T, f func(*testing.T)) {
 
 	t.Run("wasm", func(t *testing.T) {
 		t.Log("wasm mode test start")
-		wasm, err := os.ReadFile("main.wasm")
+		wasm, err := os.ReadFile(wasmPath)
 		if err != nil {
-			t.Skip("wasm not found")
+			t.Skipf("wasm file not found at path: %s", wasmPath)
 		}
 		vm, err := proxytest.NewWasmVMContext(wasm)
 		require.NoError(t, err)
@@ -81,6 +116,11 @@ func RunTest(t *testing.T, f func(*testing.T)) {
 		f(t)
 		t.Log("wasm mode test end")
 	})
+}
+
+// Run unit test both in go and wasm mode.
+func RunTest(t *testing.T, f func(*testing.T)) {
+	RunTestWithPath(t, getDefaultWasmPath(), f)
 }
 
 // setWasmInitVMContext set the wasm init VM context.
