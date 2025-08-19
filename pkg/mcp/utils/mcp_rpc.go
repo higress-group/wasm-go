@@ -15,8 +15,8 @@
 package utils
 
 import (
+	"encoding/base64"
 	"fmt"
-
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
@@ -62,6 +62,20 @@ func SendMCPToolTextResult(ctx wrapper.HttpContext, result string, debugInfo ...
 		{
 			"type": "text",
 			"text": result,
+		},
+	}, responseDebugInfo)
+}
+
+func SendMCPToolImageResult(ctx wrapper.HttpContext, image []byte, contentType string, debugInfo ...string) {
+	responseDebugInfo := "mcp:tools/call::result"
+	if len(debugInfo) > 0 {
+		responseDebugInfo = debugInfo[0]
+	}
+	OnMCPToolCallSuccess(ctx, []map[string]any{
+		{
+			"type":     "image",
+			"data":     base64.StdEncoding.EncodeToString(image),
+			"mimeType": contentType,
 		},
 	}, responseDebugInfo)
 }
