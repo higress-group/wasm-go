@@ -174,7 +174,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config RequestBlockConfig) ty
 		}
 	}
 	if len(config.blockBodies) == 0 {
-		ctx.DonotReadRequestBody()
+		ctx.DontReadRequestBody()
 	}
 	return types.ActionContinue
 }

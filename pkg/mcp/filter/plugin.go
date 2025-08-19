@@ -293,7 +293,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config mcpFilterConfig) types
 	log.Debugf("onHttpRequestHeaders called")
 	if !wrapper.HasRequestBody() || (config.httpRequestHandler == nil && config.jsonRpcRequestHandler == nil) {
 		log.Debugf("no request body or no handler, skip reading body")
-		ctx.DonotReadRequestBody()
+		ctx.DontReadRequestBody()
 		return types.ActionContinue
 	}
 	log.Debugf("has request body and handler, read body")
@@ -325,7 +325,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config mcpFilterConfig) type
 	// IsApplicationJson checks if the content type is application/json, so we can skip reading the body if it's application/octet-stream
 	if !wrapper.HasResponseBody() || !wrapper.IsApplicationJson() || (config.httpResponseHandler == nil && config.jsonRpcResponseHandler == nil) {
 		log.Debugf("no response body or no handler, skip reading body")
-		ctx.DonotReadResponseBody()
+		ctx.DontReadResponseBody()
 		return types.ActionContinue
 	}
 	log.Debugf("has response body and handler, read body")

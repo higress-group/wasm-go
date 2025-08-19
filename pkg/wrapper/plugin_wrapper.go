@@ -794,11 +794,11 @@ func (ctx *CommonHttpCtx[PluginConfig]) Method() string {
 	return GetRequestMethod()
 }
 
-func (ctx *CommonHttpCtx[PluginConfig]) DonotReadRequestBody() {
+func (ctx *CommonHttpCtx[PluginConfig]) DontReadRequestBody() {
 	ctx.needRequestBody = false
 }
 
-func (ctx *CommonHttpCtx[PluginConfig]) DonotReadResponseBody() {
+func (ctx *CommonHttpCtx[PluginConfig]) DontReadResponseBody() {
 	ctx.needResponseBody = false
 }
 

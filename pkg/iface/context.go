@@ -59,9 +59,9 @@ type HttpContext interface {
 	// You can call this function to set custom trace span attribute
 	WriteUserAttributeToTrace() error
 	// If the onHttpRequestBody handle is not set, the request body will not be read by default
-	DonotReadRequestBody()
+	DontReadRequestBody()
 	// If the onHttpResponseBody handle is not set, the request body will not be read by default
-	DonotReadResponseBody()
+	DontReadResponseBody()
 	// If the onHttpStreamingRequestBody handle is not set, and the onHttpRequestBody handle is set, the request body will be buffered by default
 	BufferRequestBody()
 	// If the onHttpStreamingResponseBody handle is not set, and the onHttpResponseBody handle is set, the response body will be buffered by default
