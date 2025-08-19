@@ -138,15 +138,21 @@ func (h *testHost) CallOnHttpRequestHeaders(headers [][2]string) types.Action {
 	return action
 }
 
-// CallOnHttpRequestBody call the onHttpRequestBody method in the wasm plugin.
-func (h *testHost) CallOnHttpRequestBody(body []byte) types.Action {
+// ensureContextInitialized ensures the HTTP context is properly initialized
+// by calling InitHttp and setting up default request headers if needed
+func (h *testHost) ensureContextInitialized() {
 	if !h.currentContextValid {
 		h.InitHttp()
 		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestDomain}}, false)
 		if action != types.ActionContinue {
-			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
+			panic("wasm plugin unit test should CallOnHttpRequestHeaders first")
 		}
 	}
+}
+
+// CallOnHttpRequestBody call the onHttpRequestBody method in the wasm plugin.
+func (h *testHost) CallOnHttpRequestBody(body []byte) types.Action {
+	h.ensureContextInitialized()
 	action := h.HostEmulator.CallOnRequestBody(h.currentContextID, body, true)
 	return action
 }
@@ -154,13 +160,7 @@ func (h *testHost) CallOnHttpRequestBody(body []byte) types.Action {
 // CallOnHttpStreamingRequestBody call the onHttpRequestBody method in the wasm plugin.
 // endOfStream is true if the body is the last chunk of the request body.
 func (h *testHost) CallOnHttpStreamingRequestBody(body []byte, endOfStream bool) types.Action {
-	if !h.currentContextValid {
-		h.InitHttp()
-		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestDomain}}, false)
-		if action != types.ActionContinue {
-			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
-		}
-	}
+	h.ensureContextInitialized()
 	action := h.HostEmulator.CallOnRequestBody(h.currentContextID, body, endOfStream)
 	return action
 }
@@ -168,39 +168,21 @@ func (h *testHost) CallOnHttpStreamingRequestBody(body []byte, endOfStream bool)
 // CallOnHttpStreamingResponseBody call the onHttpResponseBody method in the wasm plugin.
 // endOfStream is true if the body is the last chunk of the response body.
 func (h *testHost) CallOnHttpStreamingResponseBody(body []byte, endOfStream bool) types.Action {
-	if !h.currentContextValid {
-		h.InitHttp()
-		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestDomain}}, false)
-		if action != types.ActionContinue {
-			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
-		}
-	}
+	h.ensureContextInitialized()
 	action := h.HostEmulator.CallOnResponseBody(h.currentContextID, body, endOfStream)
 	return action
 }
 
 // CallOnHttpResponseHeaders call the onHttpResponseHeaders method in the wasm plugin.
 func (h *testHost) CallOnHttpResponseHeaders(headers [][2]string) types.Action {
-	if !h.currentContextValid {
-		h.InitHttp()
-		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestDomain}}, false)
-		if action != types.ActionContinue {
-			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
-		}
-	}
+	h.ensureContextInitialized()
 	action := h.HostEmulator.CallOnResponseHeaders(h.currentContextID, headers, false)
 	return action
 }
 
 // CallOnHttpResponseBody call the onHttpResponseBody method in the wasm plugin.
 func (h *testHost) CallOnHttpResponseBody(body []byte) types.Action {
-	if !h.currentContextValid {
-		h.InitHttp()
-		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestDomain}}, false)
-		if action != types.ActionContinue {
-			panic("wasm plugin unit test should CallOnHttpRequestHeaderss first")
-		}
-	}
+	h.ensureContextInitialized()
 	action := h.HostEmulator.CallOnResponseBody(h.currentContextID, body, true)
 	return action
 }
