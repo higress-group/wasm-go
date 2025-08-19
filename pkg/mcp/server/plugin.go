@@ -325,8 +325,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 			})
 		}
 		utils.OnMCPResponseSuccess(ctx, map[string]any{
-			"tools":      listedTools,
-			"nextCursor": "",
+			"tools": listedTools,
 		}, fmt.Sprintf("mcp:%s:tools/list", currentServerNameForHandlers))
 		return nil
 	}

@@ -64,6 +64,8 @@ var (
 
 	SetConfigParser = filter.SetConfigParser
 
+	SetConfigOverrideParser = filter.SetConfigOverrideParser
+
 	FilterName = filter.FilterName
 
 	SetJsonRpcRequestFilter = filter.SetJsonRpcRequestFilter

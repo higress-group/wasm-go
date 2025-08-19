@@ -281,7 +281,7 @@ func parseGlobalConfig(configBytes []byte, config *mcpFilterConfig) error {
 }
 
 func parseOverrideConfig(configBytes []byte, global mcpFilterConfig, config *mcpFilterConfig) error {
-	err := globalContext.parseFilterRuleOverrideConfig(configBytes, global, &config.config)
+	err := globalContext.parseFilterRuleOverrideConfig(configBytes, global.config, &config.config)
 	if err != nil {
 		return err
 	}
