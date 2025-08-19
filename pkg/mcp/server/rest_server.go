@@ -974,6 +974,15 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 			// Process response
 			var result string
 
+			headerMap := convertHeaders(responseHeaders)
+			contentType := headerMap[strings.ToLower("Content-Type")]
+			// Check if the response is an image
+			if strings.HasPrefix(contentType, "image/") {
+				// Handle image response by sending it as an MCP tool result
+				utils.SendMCPToolImageResult(ctx, responseBody, contentType, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+				return
+			}
+
 			// Case 1: Full response template is provided
 			if t.toolConfig.parsedResponseTemplate != nil {
 				templateResult, err := executeTemplate(t.toolConfig.parsedResponseTemplate, responseBody)
