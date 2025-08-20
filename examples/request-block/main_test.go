@@ -61,6 +61,90 @@ func TestParseConfig(t *testing.T) {
 	})
 }
 
+func TestSetDomainNameAndGetMatchConfig(t *testing.T) {
+	test.RunGoTest(t, func(t *testing.T) {
+		// Create a config with domain-specific rules
+		domainSpecificConfig := func() json.RawMessage {
+			data, _ := json.Marshal(map[string]interface{}{
+				// Global config - applies to all requests when no specific rule matches
+				"blocked_code":     403,
+				"blocked_message":  "Access denied",
+				"case_sensitive":   false,
+				"block_urls":       []string{"global-blocked"},
+				"block_exact_urls": []string{"/global-block"},
+				"block_headers":    []string{"global-blocked-header"},
+				"block_bodies":     []string{"global-blocked-content"},
+				// Domain-specific rules
+				"_rules_": []map[string]interface{}{
+					{
+						"_match_domain_":   []string{"custom.example.com"},
+						"blocked_code":     429,
+						"blocked_message":  "Too many requests for custom domain",
+						"case_sensitive":   true,
+						"block_urls":       []string{"custom-blocked"},
+						"block_exact_urls": []string{"/custom-block"},
+						"block_headers":    []string{"custom-blocked-header"},
+						"block_bodies":     []string{"custom-blocked-content"},
+					},
+					{
+						"_match_domain_":   []string{"another.example.com"},
+						"blocked_code":     451,
+						"blocked_message":  "Unavailable for legal reasons",
+						"case_sensitive":   false,
+						"block_urls":       []string{"legal-blocked"},
+						"block_exact_urls": []string{"/legal-block"},
+						"block_headers":    []string{"legal-blocked-header"},
+						"block_bodies":     []string{"legal-blocked-content"},
+					},
+				},
+			})
+			return data
+		}()
+
+		host, status := test.NewTestHost(domainSpecificConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		// Test default domain configuration (should get global config)
+		config, err := host.GetMatchConfig()
+		require.NoError(t, err)
+		require.NotNil(t, config)
+
+		blockConfig := config.(*RequestBlockConfig)
+		require.Equal(t, uint32(403), blockConfig.blockedCode)
+		require.Equal(t, "Access denied", blockConfig.blockedMessage)
+		require.Contains(t, blockConfig.blockUrls, "global-blocked")
+
+		// Test setting custom domain and getting domain-specific config
+		err = host.SetDomainName("custom.example.com")
+		require.NoError(t, err)
+
+		config, err = host.GetMatchConfig()
+		require.NoError(t, err)
+		require.NotNil(t, config)
+
+		blockConfig = config.(*RequestBlockConfig)
+		require.Equal(t, uint32(429), blockConfig.blockedCode)
+		require.Equal(t, "Too many requests for custom domain", blockConfig.blockedMessage)
+		require.Contains(t, blockConfig.blockUrls, "custom-blocked")
+		require.True(t, blockConfig.caseSensitive)
+
+		// Test setting another domain and getting different config
+		err = host.SetDomainName("another.example.com")
+		require.NoError(t, err)
+
+		config, err = host.GetMatchConfig()
+		require.NoError(t, err)
+		require.NotNil(t, config)
+
+		blockConfig = config.(*RequestBlockConfig)
+		require.Equal(t, uint32(451), blockConfig.blockedCode)
+		require.Equal(t, "Unavailable for legal reasons", blockConfig.blockedMessage)
+		require.Contains(t, blockConfig.blockUrls, "legal-blocked")
+		require.False(t, blockConfig.caseSensitive)
+	})
+}
+
 func TestBlockUrlByKeyword(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(testConfig)

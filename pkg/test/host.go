@@ -42,10 +42,10 @@ type TestHost interface {
 	SetClusterName(clusterName string) error
 	// SetRequestId set the property x_request_id with the request id.
 	SetRequestId(requestId string) error
+	// SetDomainName set the domain for the current HTTP context.
+	SetDomainName(domain string) error
 	// GetMatchConfig get the match config with default host name.
 	GetMatchConfig() (any, error)
-	// GetMatchConfigWithHost get the match config with the host name.
-	GetMatchConfigWithDomain(domain string) (any, error)
 	// GetHttpStreamAction get the http stream action.
 	GetHttpStreamAction() types.Action
 	// GetRequestHeaders get the request headers.
@@ -66,16 +66,21 @@ type TestHost interface {
 // proxytest.HostEmulator is the interface for the host emulator.
 // currentContextID is the context id for the current http request.
 // currentContextValid is the valid flag for the current http request.
+// currentDomain is the domain for configuration matching.
 // reset is the function to reset the test host.
 type testHost struct {
 	proxytest.HostEmulator
 	currentContextID    uint32
 	currentContextValid bool
+	currentDomain       string
 	reset               func()
 }
 
 // Reset call the reset function to call internal.VMStateReset() and release mutex for currentHost.
 func (h *testHost) Reset() {
+	h.currentContextID = 0
+	h.currentContextValid = false
+	h.currentDomain = ""
 	h.reset()
 }
 
@@ -216,21 +221,26 @@ func (h *testHost) SetRequestId(requestId string) error {
 	return h.SetProperty([]string{"x_request_id"}, []byte(requestId))
 }
 
-// Set host name to defaultTestHostName if not provided, to make sure match config is not empty
-func (h *testHost) GetMatchConfig() (any, error) {
-	return h.GetMatchConfigWithDomain(defaultTestDomain)
+// SetDomainName set the domain for the current HTTP context.
+// This method sets the domain for configuration matching.
+func (h *testHost) SetDomainName(domain string) error {
+	if domain == "" {
+		return errors.New("domain is empty")
+	}
+	h.currentDomain = domain
+	return nil
 }
 
-// GetMatchConfigWithDomain get the match config with domain.
 // GetMatchConfig depends on reflect feature so it can only be used in go mode.
 // return config type is any, so unitTest needs to cast the config to the actual type.
-func (h *testHost) GetMatchConfigWithDomain(domain string) (any, error) {
-	if domain == "" {
-		return nil, errors.New("domain is empty")
-	}
+func (h *testHost) GetMatchConfig() (any, error) {
 	contextID := h.HostEmulator.InitializeHttpContext()
 
-	h.HostEmulator.SetHttpRequestHeaders(contextID, [][2]string{{":authority", domain}})
+	headers := [][2]string{{":authority", defaultTestDomain}}
+	if h.currentDomain != "" {
+		headers = [][2]string{{":authority", h.currentDomain}}
+	}
+	h.HostEmulator.SetHttpRequestHeaders(contextID, headers)
 
 	httpContext := proxywasm.GetHttpContext(contextID)
 	h.HostEmulator.CompleteHttpContext(contextID)

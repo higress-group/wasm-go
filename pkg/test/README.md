@@ -12,7 +12,7 @@ The `pkg/test` directory provides a unit testing framework for the wasm-go proje
 - **`redis.go`** - Provides Redis response building utility functions
 - **`test.go`** - Provides test runners supporting both Go mode and Wasm mode
 - **`utils.go`** - Provides utility functions for header testing
-- 
+
 ## Core Features
 
 ### 1. Test Runners (`test.go`)
@@ -45,6 +45,24 @@ Runs tests only in Wasm mode with a specified wasm file path. This function allo
 1. **Environment Variable**: Set `WASM_FILE_PATH` environment variable
 2. **Custom Path**: Use `RunWasmTestWithPath()` or `RunTestWithPath()` functions
 3. **Auto-detection**: The framework automatically detects common wasm file locations
+
+#### Common Wasm file Path
+
+The framework searches for wasm files in the following locations (in order of priority):
+
+- `main.wasm` - Default wasm file name in project root
+- `plugin.wasm` - Alternative wasm file name in project root
+
+**Example project structure:**
+```
+my-wasm-plugin/
+├── main.go
+├── main.wasm         
+├── go.mod
+└── pkg/
+```
+
+**Note**: The auto-detection only searches in the current working directory. For more complex project structures, use environment variables or explicit path functions.
 
 ```bash
 # Compile wasm binary
@@ -248,21 +266,22 @@ func TestParseConfig(t *testing.T) {
 
         // Get global plugin configuration
         config, err := host.GetMatchConfig()
-        // Get plugin configuration with match host
-        config, err = host.GetMatchConfigWithDomain("foo.bar.com")
-        // Get plugin configuration with match route
-        host.SetRouteName("foo")
-        config, err = host.GetMatchConfig()
-        // Get plugin configuration with match route
-        host.SetClusterName("service")
-        config, err = host.GetMatchConfig()
+		// Get plugin configuration with match route
+		host.SetRouteName("foo")
+		config, err = host.GetMatchConfig()
+		// Get plugin configuration with match cluster
+		host.SetClusterName("service")
+		config, err = host.GetMatchConfig()
+		// Get plugin configuration with match domain
+		host.SetDomainName("foo.bar.com")
+		config, err = host.GetMatchConfig()
 
         // Verify configuration content
         // ... Your configuration validation logic
     })
 }
 ```
-**Note**: `GetMatchConfig()` and `GetMatchConfigWithHost()` can only be used in `RunGoTest()` mode because they are not the proxy-wasm ABI interface. These functions use Go reflection to expose internal plugin configuration for testing.
+**Note**: `GetMatchConfig()` can only be used in `RunGoTest()` mode because they are not the proxy-wasm ABI interface. These functions use Go reflection to expose internal plugin configuration for testing.
 
 ## Best Practices
 
