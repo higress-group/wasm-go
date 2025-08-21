@@ -217,7 +217,7 @@ func (t *RestTool) parseTemplates() error {
 		return errors.New("direct response mode must set responseTemplate.body")
 	}
 
-	// Parse eror response template if present
+	// Parse error response template if present
 	if t.ErrorResponseTemplate != "" {
 		t.parsedErrorResponseTemplate, err = template.New("errorResponse").Funcs(templateFuncs()).Parse(t.ErrorResponseTemplate)
 		if err != nil {
