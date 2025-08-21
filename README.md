@@ -104,3 +104,6 @@ spec:
 
 The rules will be matched in the order of configuration. If one match is found, it will stop, and the matching configuration will take effect.
 
+## Unit Testing
+
+For comprehensive unit testing support, see our [Test Framework Documentation](pkg/test/README.md).

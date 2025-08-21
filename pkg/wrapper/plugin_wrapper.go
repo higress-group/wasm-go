@@ -774,6 +774,14 @@ func (ctx *CommonHttpCtx[PluginConfig]) GetByteSliceContext(key string, defaultV
 	return defaultValue
 }
 
+func (ctx *CommonHttpCtx[PluginConfig]) GetMatchConfig() (*PluginConfig, error) {
+	config, err := ctx.plugin.GetMatchConfig()
+	if err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
 func (ctx *CommonHttpCtx[PluginConfig]) Scheme() string {
 	proxywasm.SetEffectiveContext(ctx.contextID)
 	return GetRequestScheme()
