@@ -49,11 +49,12 @@ var globalContext Context
 
 // ToolInfo stores information about a tool for the global registry.
 type ToolInfo struct {
-	Name        string
-	Description string
-	InputSchema map[string]any
-	ServerName  string // Original server name
-	Tool        Tool   // The actual tool instance for cloning
+	Name         string
+	Description  string
+	InputSchema  map[string]any
+	OutputSchema map[string]any // New field for MCP Protocol Version 2025-06-18
+	ServerName   string         // Original server name
+	Tool         Tool           // The actual tool instance for cloning
 }
 
 // GlobalToolRegistry holds all tools from all servers.
@@ -76,8 +77,9 @@ func (r *GlobalToolRegistry) RegisterTool(serverName string, toolName string, to
 		Name:        toolName,
 		Description: tool.Description(),
 		InputSchema: tool.InputSchema(),
+		OutputSchema: tool.OutputSchema(), // New field for MCP Protocol Version 2025-06-18
 		ServerName:  serverName,
-		Tool:        tool,
+		Tool:       tool,
 	}
 	log.Debugf("Registered tool %s/%s", serverName, toolName)
 }
@@ -120,6 +122,7 @@ type Tool interface {
 	Call(httpCtx HttpContext, server Server) error
 	Description() string
 	InputSchema() map[string]any
+	OutputSchema() map[string]any // New method for MCP Protocol Version 2025-06-18
 }
 
 // ToolSetConfig defines the configuration for a toolset.
@@ -276,12 +279,40 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		version := params.Get("protocolVersion").String()
 		if version == "" {
 			utils.OnMCPResponseError(ctx, errors.New("Unsupported protocol version"), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
+			return nil
 		}
+		
+		// Support for multiple protocol versions including 2025-06-18
+		supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+		versionSupported := false
+		for _, supportedVersion := range supportedVersions {
+			if version == supportedVersion {
+				versionSupported = true
+				break
+			}
+		}
+		
+		if !versionSupported {
+			utils.OnMCPResponseError(ctx, fmt.Errorf("Unsupported protocol version: %s", version), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
+			return nil
+		}
+
+		// Store protocol version in context for later use
+		ctx.SetContext("MCP_PROTOCOL_VERSION", version)
+
+		capabilities := map[string]any{
+			"tools": map[string]any{},
+		}
+		
+		// Add structured output support for version 2025-06-18
+		if version == "2025-06-18" {
+			capabilities["tools"].(map[string]any)["outputSchema"] = true
+			capabilities["tools"].(map[string]any)["structuredData"] = true
+		}
+
 		utils.OnMCPResponseSuccess(ctx, map[string]any{
 			"protocolVersion": version,
-			"capabilities": map[string]any{
-				"tools": map[string]any{},
-			},
+			"capabilities":    capabilities,
 			"serverInfo": map[string]any{
 				"name":    currentServerNameForHandlers, // Use the actual server name (single or composed)
 				"version": "1.0.0",
@@ -318,11 +349,16 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 					continue
 				}
 			}
-			listedTools = append(listedTools, map[string]any{
+			toolDef := map[string]any{
 				"name":        toolFullName,
 				"description": tool.Description(),
 				"inputSchema": tool.InputSchema(),
-			})
+			}
+			// Add outputSchema if it exists (MCP Protocol Version 2025-06-18)
+			if outputSchema := tool.OutputSchema(); outputSchema != nil && len(outputSchema) > 0 {
+				toolDef["outputSchema"] = outputSchema
+			}
+			listedTools = append(listedTools, toolDef)
 		}
 		utils.OnMCPResponseSuccess(ctx, map[string]any{
 			"tools": listedTools,
