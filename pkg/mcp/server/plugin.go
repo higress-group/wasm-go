@@ -73,14 +73,18 @@ func (r *GlobalToolRegistry) RegisterTool(serverName string, toolName string, to
 	if _, ok := r.serverTools[serverName]; !ok {
 		r.serverTools[serverName] = make(map[string]ToolInfo)
 	}
-	r.serverTools[serverName][toolName] = ToolInfo{
+	toolInfo := ToolInfo{
 		Name:        toolName,
 		Description: tool.Description(),
 		InputSchema: tool.InputSchema(),
-		OutputSchema: tool.OutputSchema(), // New field for MCP Protocol Version 2025-06-18
 		ServerName:  serverName,
 		Tool:       tool,
 	}
+	// Check if tool implements OutputSchema (MCP Protocol Version 2025-06-18)
+	if toolWithSchema, ok := tool.(ToolWithOutputSchema); ok {
+		toolInfo.OutputSchema = toolWithSchema.OutputSchema()
+	}
+	r.serverTools[serverName][toolName] = toolInfo
 	log.Debugf("Registered tool %s/%s", serverName, toolName)
 }
 
@@ -122,7 +126,14 @@ type Tool interface {
 	Call(httpCtx HttpContext, server Server) error
 	Description() string
 	InputSchema() map[string]any
-	OutputSchema() map[string]any // New method for MCP Protocol Version 2025-06-18
+}
+
+// ToolWithOutputSchema is an optional interface for tools that support output schema
+// (MCP Protocol Version 2025-06-18). Tools can optionally implement this interface
+// to provide output schema information.
+type ToolWithOutputSchema interface {
+	Tool
+	OutputSchema() map[string]any
 }
 
 // ToolSetConfig defines the configuration for a toolset.
@@ -354,9 +365,11 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				"description": tool.Description(),
 				"inputSchema": tool.InputSchema(),
 			}
-			// Add outputSchema if it exists (MCP Protocol Version 2025-06-18)
-			if outputSchema := tool.OutputSchema(); outputSchema != nil && len(outputSchema) > 0 {
-				toolDef["outputSchema"] = outputSchema
+			// Add outputSchema if tool implements ToolWithOutputSchema (MCP Protocol Version 2025-06-18)
+			if toolWithSchema, ok := tool.(ToolWithOutputSchema); ok {
+				if outputSchema := toolWithSchema.OutputSchema(); outputSchema != nil && len(outputSchema) > 0 {
+					toolDef["outputSchema"] = outputSchema
+				}
 			}
 			listedTools = append(listedTools, toolDef)
 		}
