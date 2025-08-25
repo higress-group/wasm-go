@@ -51,8 +51,9 @@ func (cs *ComposedMCPServer) GetMCPTools() map[string]Tool {
 
 			composedToolName := fmt.Sprintf("%s%s%s", originalServerName, consts.ToolSetNameSplitter, originalToolName)
 			composedTools[composedToolName] = &DescriptiveTool{
-				description: toolInfo.Description,
-				inputSchema: toolInfo.InputSchema,
+				description:  toolInfo.Description,
+				inputSchema:  toolInfo.InputSchema,
+				outputSchema: toolInfo.OutputSchema, // New field for MCP Protocol Version 2025-06-18
 			}
 		}
 	}
@@ -88,8 +89,9 @@ func (cs *ComposedMCPServer) Clone() Server {
 // DescriptiveTool is a placeholder Tool implementation for ComposedMCPServer.
 // Its Call and Create methods should never be invoked.
 type DescriptiveTool struct {
-	description string
-	inputSchema map[string]any
+	description  string
+	inputSchema  map[string]any
+	outputSchema map[string]any // New field for MCP Protocol Version 2025-06-18
 }
 
 // Create for DescriptiveTool should not be called.
@@ -97,8 +99,9 @@ func (dt *DescriptiveTool) Create(params []byte) Tool {
 	log.Errorf("DescriptiveTool.Create called for tool used in ComposedMCPServer. This should not happen.")
 	// Return a new instance to fulfill the interface, though it's an error state.
 	return &DescriptiveTool{
-		description: dt.description,
-		inputSchema: dt.inputSchema,
+		description:  dt.description,
+		inputSchema:  dt.inputSchema,
+		outputSchema: dt.outputSchema,
 	}
 }
 
@@ -116,4 +119,9 @@ func (dt *DescriptiveTool) Description() string {
 // InputSchema returns the tool's input schema.
 func (dt *DescriptiveTool) InputSchema() map[string]any {
 	return dt.inputSchema
+}
+
+// OutputSchema returns the tool's output schema (MCP Protocol Version 2025-06-18).
+func (dt *DescriptiveTool) OutputSchema() map[string]any {
+	return dt.outputSchema
 }

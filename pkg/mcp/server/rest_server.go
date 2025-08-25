@@ -87,6 +87,7 @@ type RestTool struct {
 	Description           string                   `json:"description"`
 	Security              SecurityRequirement      `json:"security,omitempty"` // Tool-level security for MCP Client to MCP Server
 	Args                  []RestToolArg            `json:"args"`
+	OutputSchema          map[string]any           `json:"outputSchema,omitempty"` // Output schema for MCP Protocol Version 2025-06-18
 	RequestTemplate       RestToolRequestTemplate  `json:"requestTemplate,omitempty"`
 	ResponseTemplate      RestToolResponseTemplate `json:"responseTemplate"`
 	ErrorResponseTemplate string                   `json:"errorResponseTemplate"`
@@ -1077,6 +1078,11 @@ func (t *RestMCPTool) InputSchema() map[string]any {
 	}
 
 	return schema
+}
+
+// OutputSchema implements Tool interface (MCP Protocol Version 2025-06-18)
+func (t *RestMCPTool) OutputSchema() map[string]any {
+	return t.toolConfig.OutputSchema
 }
 
 func convertHeaders(responseHeaders [][2]string) map[string]string {
