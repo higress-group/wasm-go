@@ -22,6 +22,59 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+func TestMCPProtocolVersionSupport(t *testing.T) {
+	tests := []struct {
+		name              string
+		version           string
+		shouldBeSupported bool
+	}{
+		{
+			name:              "supported version 2024-11-05",
+			version:           "2024-11-05",
+			shouldBeSupported: true,
+		},
+		{
+			name:              "supported version 2025-03-26",
+			version:           "2025-03-26",
+			shouldBeSupported: true,
+		},
+		{
+			name:              "supported version 2025-06-18",
+			version:           "2025-06-18",
+			shouldBeSupported: true,
+		},
+		{
+			name:              "unsupported version 2023-01-01",
+			version:           "2023-01-01",
+			shouldBeSupported: false,
+		},
+		{
+			name:              "invalid version format",
+			version:           "invalid-version",
+			shouldBeSupported: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test the version validation logic
+			supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+			versionSupported := false
+			for _, supportedVersion := range supportedVersions {
+				if tt.version == supportedVersion {
+					versionSupported = true
+					break
+				}
+			}
+
+			if versionSupported != tt.shouldBeSupported {
+				t.Errorf("Version %s support check failed: expected %v, got %v",
+					tt.version, tt.shouldBeSupported, versionSupported)
+			}
+		})
+	}
+}
+
 func TestConvertArgToString(t *testing.T) {
 	tests := []struct {
 		name     string

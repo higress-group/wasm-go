@@ -78,7 +78,7 @@ func (r *GlobalToolRegistry) RegisterTool(serverName string, toolName string, to
 		Description: tool.Description(),
 		InputSchema: tool.InputSchema(),
 		ServerName:  serverName,
-		Tool:       tool,
+		Tool:        tool,
 	}
 	// Check if tool implements OutputSchema (MCP Protocol Version 2025-06-18)
 	if toolWithSchema, ok := tool.(ToolWithOutputSchema); ok {
@@ -292,7 +292,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 			utils.OnMCPResponseError(ctx, errors.New("Unsupported protocol version"), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
 			return nil
 		}
-		
+
 		// Support for multiple protocol versions including 2025-06-18
 		supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
 		versionSupported := false
@@ -302,7 +302,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				break
 			}
 		}
-		
+
 		if !versionSupported {
 			utils.OnMCPResponseError(ctx, fmt.Errorf("Unsupported protocol version: %s", version), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
 			return nil
@@ -314,7 +314,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		capabilities := map[string]any{
 			"tools": map[string]any{},
 		}
-		
+
 		// Add structured output support for version 2025-06-18
 		if version == "2025-06-18" {
 			capabilities["tools"].(map[string]any)["outputSchema"] = true
@@ -519,6 +519,33 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types
 	ctx.DisableReroute()
 	ctx.SetRequestBodyBufferLimit(DefaultMaxBodyBytes)
 	ctx.SetResponseBodyBufferLimit(DefaultMaxBodyBytes)
+
+	// Parse MCP-Protocol-Version header and store in context
+	// This allows clients to specify the MCP protocol version via HTTP header
+	// instead of only through the JSON-RPC initialize method
+	protocolVersion, _ := proxywasm.GetHttpRequestHeader("MCP-Protocol-Version")
+	if protocolVersion != "" {
+		// Validate the protocol version against supported versions
+		supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+		versionSupported := false
+		for _, supportedVersion := range supportedVersions {
+			if protocolVersion == supportedVersion {
+				versionSupported = true
+				break
+			}
+		}
+
+		if versionSupported {
+			// Store protocol version in context for later use by MCP response functions
+			ctx.SetContext("MCP_PROTOCOL_VERSION", protocolVersion)
+			log.Debugf("MCP Protocol Version set from header: %s", protocolVersion)
+		} else {
+			log.Warnf("Unsupported MCP Protocol Version in header: %s", protocolVersion)
+		}
+
+		// Remove the header from the request to prevent it from being forwarded
+		proxywasm.RemoveHttpRequestHeader("MCP-Protocol-Version")
+	}
 
 	if ctx.Method() == "GET" {
 		proxywasm.SendHttpResponseWithDetail(405, "not_support_sse_on_this_endpoint", nil, nil, -1)
