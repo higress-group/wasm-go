@@ -144,6 +144,10 @@ func TestResponseTemplatePrependAppend(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create a tool with the test template
 			tool := RestTool{
+				RequestTemplate: RestToolRequestTemplate{
+					URL:    "https://example.com/api",
+					Method: "GET",
+				},
 				ResponseTemplate: tt.template,
 			}
 
