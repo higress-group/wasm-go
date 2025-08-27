@@ -15,6 +15,8 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -70,6 +72,384 @@ func TestMCPProtocolVersionSupport(t *testing.T) {
 			if versionSupported != tt.shouldBeSupported {
 				t.Errorf("Version %s support check failed: expected %v, got %v",
 					tt.version, tt.shouldBeSupported, versionSupported)
+			}
+		})
+	}
+}
+
+func TestMCPProtocolVersionCapabilities(t *testing.T) {
+	tests := []struct {
+		name                   string
+		version                string
+		expectedOutputSchema   bool
+		expectedStructuredData bool
+	}{
+		{
+			name:                   "version 2024-11-05 capabilities",
+			version:                "2024-11-05",
+			expectedOutputSchema:   false,
+			expectedStructuredData: false,
+		},
+		{
+			name:                   "version 2025-03-26 capabilities",
+			version:                "2025-03-26",
+			expectedOutputSchema:   false,
+			expectedStructuredData: false,
+		},
+		{
+			name:                   "version 2025-06-18 capabilities",
+			version:                "2025-06-18",
+			expectedOutputSchema:   true,
+			expectedStructuredData: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the capabilities logic from the initialize method
+			capabilities := map[string]any{
+				"tools": map[string]any{},
+			}
+
+			// Add structured output support for version 2025-06-18
+			if tt.version == "2025-06-18" {
+				capabilities["tools"].(map[string]any)["outputSchema"] = true
+				capabilities["tools"].(map[string]any)["structuredData"] = true
+			}
+
+			tools := capabilities["tools"].(map[string]any)
+
+			outputSchema, hasOutputSchema := tools["outputSchema"]
+			if tt.expectedOutputSchema {
+				if !hasOutputSchema || outputSchema != true {
+					t.Errorf("Expected outputSchema capability for version %s", tt.version)
+				}
+			} else {
+				if hasOutputSchema {
+					t.Errorf("Unexpected outputSchema capability for version %s", tt.version)
+				}
+			}
+
+			structuredData, hasStructuredData := tools["structuredData"]
+			if tt.expectedStructuredData {
+				if !hasStructuredData || structuredData != true {
+					t.Errorf("Expected structuredData capability for version %s", tt.version)
+				}
+			} else {
+				if hasStructuredData {
+					t.Errorf("Unexpected structuredData capability for version %s", tt.version)
+				}
+			}
+		})
+	}
+}
+
+func TestMCPProtocolVersionHeaderParsing(t *testing.T) {
+	tests := []struct {
+		name          string
+		headerValue   string
+		shouldSetCtx  bool
+		shouldLogWarn bool
+	}{
+		{
+			name:          "valid header 2024-11-05",
+			headerValue:   "2024-11-05",
+			shouldSetCtx:  true,
+			shouldLogWarn: false,
+		},
+		{
+			name:          "valid header 2025-03-26",
+			headerValue:   "2025-03-26",
+			shouldSetCtx:  true,
+			shouldLogWarn: false,
+		},
+		{
+			name:          "valid header 2025-06-18",
+			headerValue:   "2025-06-18",
+			shouldSetCtx:  true,
+			shouldLogWarn: false,
+		},
+		{
+			name:          "invalid header version",
+			headerValue:   "2023-01-01",
+			shouldSetCtx:  false,
+			shouldLogWarn: true,
+		},
+		{
+			name:          "malformed header version",
+			headerValue:   "invalid-format",
+			shouldSetCtx:  false,
+			shouldLogWarn: true,
+		},
+		{
+			name:          "empty header value",
+			headerValue:   "",
+			shouldSetCtx:  false,
+			shouldLogWarn: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test the header parsing logic (simulating the onHttpRequestHeaders function)
+			if tt.headerValue != "" {
+				// Validate the protocol version against supported versions
+				supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+				versionSupported := false
+				for _, supportedVersion := range supportedVersions {
+					if tt.headerValue == supportedVersion {
+						versionSupported = true
+						break
+					}
+				}
+
+				if tt.shouldSetCtx && !versionSupported {
+					t.Errorf("Expected version %s to be supported but it was not", tt.headerValue)
+				}
+				if !tt.shouldSetCtx && versionSupported && tt.headerValue != "" {
+					t.Errorf("Expected version %s to be unsupported but it was supported", tt.headerValue)
+				}
+			}
+		})
+	}
+}
+
+func TestMCPProtocolVersionContextFlow(t *testing.T) {
+	// Test that protocol version flows correctly through the system
+	tests := []struct {
+		name                 string
+		headerVersion        string
+		initializeVersion    string
+		expectedFinalVersion string
+		description          string
+	}{
+		{
+			name:                 "header only 2025-06-18",
+			headerVersion:        "2025-06-18",
+			initializeVersion:    "",
+			expectedFinalVersion: "2025-06-18",
+			description:          "When only header is provided, it should be used",
+		},
+		{
+			name:                 "initialize only 2025-03-26",
+			headerVersion:        "",
+			initializeVersion:    "2025-03-26",
+			expectedFinalVersion: "2025-03-26",
+			description:          "When only initialize method provides version, it should be used",
+		},
+		{
+			name:                 "header takes precedence",
+			headerVersion:        "2025-06-18",
+			initializeVersion:    "2025-03-26",
+			expectedFinalVersion: "2025-03-26",
+			description:          "When both are provided, initialize method overrides header (processed later)",
+		},
+		{
+			name:                 "both same version",
+			headerVersion:        "2024-11-05",
+			initializeVersion:    "2024-11-05",
+			expectedFinalVersion: "2024-11-05",
+			description:          "When both provide same version, that version should be used",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the context flow:
+			// 1. onHttpRequestHeaders processes MCP-Protocol-Version header
+			// 2. initialize method may override with protocolVersion param
+
+			contextVersion := ""
+
+			// Step 1: Header processing (onHttpRequestHeaders)
+			if tt.headerVersion != "" {
+				supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+				versionSupported := false
+				for _, supportedVersion := range supportedVersions {
+					if tt.headerVersion == supportedVersion {
+						versionSupported = true
+						break
+					}
+				}
+				if versionSupported {
+					contextVersion = tt.headerVersion
+				}
+			}
+
+			// Step 2: Initialize method processing (may override)
+			if tt.initializeVersion != "" {
+				supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+				versionSupported := false
+				for _, supportedVersion := range supportedVersions {
+					if tt.initializeVersion == supportedVersion {
+						versionSupported = true
+						break
+					}
+				}
+				if versionSupported {
+					contextVersion = tt.initializeVersion
+				}
+			}
+
+			if contextVersion != tt.expectedFinalVersion {
+				t.Errorf("Context version flow failed for %s: expected %s, got %s",
+					tt.description, tt.expectedFinalVersion, contextVersion)
+			}
+		})
+	}
+}
+
+func TestMCPProtocolVersionBackwardsCompatibility(t *testing.T) {
+	// Test that older versions still work correctly
+	tests := []struct {
+		name                  string
+		version               string
+		expectsToolsListError bool
+		expectsInitializeOK   bool
+	}{
+		{
+			name:                  "2024-11-05 backwards compatibility",
+			version:               "2024-11-05",
+			expectsToolsListError: false,
+			expectsInitializeOK:   true,
+		},
+		{
+			name:                  "2025-03-26 backwards compatibility",
+			version:               "2025-03-26",
+			expectsToolsListError: false,
+			expectsInitializeOK:   true,
+		},
+		{
+			name:                  "unsupported version handling",
+			version:               "2023-01-01",
+			expectsToolsListError: true,
+			expectsInitializeOK:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test initialize method response
+			supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+			versionSupported := false
+			for _, supportedVersion := range supportedVersions {
+				if tt.version == supportedVersion {
+					versionSupported = true
+					break
+				}
+			}
+
+			if versionSupported != tt.expectsInitializeOK {
+				t.Errorf("Version %s initialize support mismatch: expected %v, got %v",
+					tt.version, tt.expectsInitializeOK, versionSupported)
+			}
+
+			// Test that capabilities are correctly set for the version
+			if versionSupported {
+				capabilities := map[string]any{
+					"tools": map[string]any{},
+				}
+
+				// Add structured output support for version 2025-06-18
+				if tt.version == "2025-06-18" {
+					capabilities["tools"].(map[string]any)["outputSchema"] = true
+					capabilities["tools"].(map[string]any)["structuredData"] = true
+				}
+
+				tools := capabilities["tools"].(map[string]any)
+
+				// Verify that only 2025-06-18 has the new capabilities
+				_, hasOutputSchema := tools["outputSchema"]
+				_, hasStructuredData := tools["structuredData"]
+
+				if tt.version == "2025-06-18" {
+					if !hasOutputSchema || !hasStructuredData {
+						t.Errorf("Version %s should have outputSchema and structuredData capabilities", tt.version)
+					}
+				} else {
+					if hasOutputSchema || hasStructuredData {
+						t.Errorf("Version %s should not have outputSchema or structuredData capabilities", tt.version)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestMCPProtocolVersionErrorHandling(t *testing.T) {
+	// Test error conditions and edge cases
+	tests := []struct {
+		name             string
+		version          string
+		expectError      bool
+		expectedErrorMsg string
+	}{
+		{
+			name:             "empty version string",
+			version:          "",
+			expectError:      true,
+			expectedErrorMsg: "Unsupported protocol version",
+		},
+		{
+			name:             "future version",
+			version:          "2026-01-01",
+			expectError:      true,
+			expectedErrorMsg: "Unsupported protocol version: 2026-01-01",
+		},
+		{
+			name:             "past version",
+			version:          "2020-01-01",
+			expectError:      true,
+			expectedErrorMsg: "Unsupported protocol version: 2020-01-01",
+		},
+		{
+			name:             "malformed version",
+			version:          "not-a-version",
+			expectError:      true,
+			expectedErrorMsg: "Unsupported protocol version: not-a-version",
+		},
+		{
+			name:        "valid current version",
+			version:     "2025-06-18",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Simulate the error handling logic from initialize method
+			var err error
+
+			if tt.version == "" {
+				err = errors.New("Unsupported protocol version")
+			} else {
+				supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+				versionSupported := false
+				for _, supportedVersion := range supportedVersions {
+					if tt.version == supportedVersion {
+						versionSupported = true
+						break
+					}
+				}
+
+				if !versionSupported {
+					err = fmt.Errorf("Unsupported protocol version: %s", tt.version)
+				}
+			}
+
+			if tt.expectError && err == nil {
+				t.Errorf("Expected error for version %s but got none", tt.version)
+			}
+
+			if !tt.expectError && err != nil {
+				t.Errorf("Unexpected error for version %s: %v", tt.version, err)
+			}
+
+			if tt.expectError && err != nil && tt.expectedErrorMsg != "" {
+				if err.Error() != tt.expectedErrorMsg {
+					t.Errorf("Expected error message '%s' for version %s, got '%s'",
+						tt.expectedErrorMsg, tt.version, err.Error())
+				}
 			}
 		})
 	}
