@@ -690,8 +690,23 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 			return fmt.Errorf("error executing response template: %v", err)
 		}
 		result = templateResult
-		// Send the result
-		utils.SendMCPToolTextResult(ctx, result, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+
+		// Check if tool has outputSchema and create structured content from arguments
+		var structuredContent map[string]any
+		if t.toolConfig.OutputSchema != nil && len(t.toolConfig.OutputSchema) > 0 {
+			// For direct response tools, use the processed arguments as structured content
+			structuredContent = map[string]any{
+				"arguments": t.arguments,
+				"template":  "direct_response",
+			}
+		}
+
+		// Send the result using structured content if available
+		if structuredContent != nil {
+			utils.SendMCPToolResultWithStructuredContent(ctx, result, structuredContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+		} else {
+			utils.SendMCPToolResult(ctx, result, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+		}
 		return nil
 	}
 
@@ -979,8 +994,39 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 			contentType := headerMap[strings.ToLower("Content-Type")]
 			// Check if the response is an image
 			if strings.HasPrefix(contentType, "image/") {
-				// Handle image response by sending it as an MCP tool result
-				utils.SendMCPToolImageResult(ctx, responseBody, contentType, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+				// Handle image response by sending it as an MCP tool result with automatic protocol handling
+				imageContent := []map[string]any{
+					{
+						"type":     "image",
+						"data":     base64.StdEncoding.EncodeToString(responseBody),
+						"mimeType": contentType,
+					},
+				}
+
+				// Check if tool has outputSchema defined and try to parse response as structured content
+				var structuredContent map[string]any
+				if t.toolConfig.OutputSchema != nil && len(t.toolConfig.OutputSchema) > 0 {
+					// For images, we might want to include metadata in structured content
+					structuredContent = map[string]any{
+						"contentType": contentType,
+						"size":        len(responseBody),
+					}
+					// Try to include additional metadata from headers if available
+					if headerMap != nil {
+						if lastModified := headerMap["Last-Modified"]; lastModified != "" {
+							structuredContent["lastModified"] = lastModified
+						}
+						if etag := headerMap["ETag"]; etag != "" {
+							structuredContent["etag"] = etag
+						}
+					}
+				}
+
+				if structuredContent != nil {
+					utils.SendMCPToolResultWithStructuredContent(ctx, string(responseBody), structuredContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+				} else {
+					utils.SendMCPToolResultWithContent(ctx, imageContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+				}
 				return
 			}
 
@@ -1007,7 +1053,36 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 			if result == "" {
 				result = "success"
 			}
-			utils.SendMCPToolTextResult(ctx, result, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+
+			// Check if tool has outputSchema and try to parse response as structured content
+			var structuredContent map[string]any
+			if t.toolConfig.OutputSchema != nil && len(t.toolConfig.OutputSchema) > 0 {
+				// Try to parse response as JSON for structured content
+				var jsonResponse interface{}
+				if err := json.Unmarshal(responseBody, &jsonResponse); err == nil {
+					// Successfully parsed as JSON, use as structured content
+					if jsonMap, ok := jsonResponse.(map[string]any); ok {
+						structuredContent = jsonMap
+					} else {
+						// If it's not a map, wrap it in a map
+						structuredContent = map[string]any{"data": jsonResponse}
+					}
+				} else {
+					// If not valid JSON, create structured content with metadata
+					structuredContent = map[string]any{
+						"contentType":   contentType,
+						"contentLength": len(responseBody),
+						"statusCode":    statusCode,
+					}
+				}
+			}
+
+			// Send the result using structured content if available
+			if structuredContent != nil {
+				utils.SendMCPToolResultWithStructuredContent(ctx, result, structuredContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+			} else {
+				utils.SendMCPToolResult(ctx, result, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+			}
 		})
 	if err != nil {
 		utils.OnMCPToolCallError(ctx, errors.New("route failed"))

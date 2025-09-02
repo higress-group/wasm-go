@@ -79,28 +79,24 @@ func TestMCPProtocolVersionSupport(t *testing.T) {
 
 func TestMCPProtocolVersionCapabilities(t *testing.T) {
 	tests := []struct {
-		name                   string
-		version                string
-		expectedOutputSchema   bool
-		expectedStructuredData bool
+		name                 string
+		version              string
+		expectedOutputSchema bool
 	}{
 		{
-			name:                   "version 2024-11-05 capabilities",
-			version:                "2024-11-05",
-			expectedOutputSchema:   false,
-			expectedStructuredData: false,
+			name:                 "version 2024-11-05 capabilities",
+			version:              "2024-11-05",
+			expectedOutputSchema: false,
 		},
 		{
-			name:                   "version 2025-03-26 capabilities",
-			version:                "2025-03-26",
-			expectedOutputSchema:   false,
-			expectedStructuredData: false,
+			name:                 "version 2025-03-26 capabilities",
+			version:              "2025-03-26",
+			expectedOutputSchema: false,
 		},
 		{
-			name:                   "version 2025-06-18 capabilities",
-			version:                "2025-06-18",
-			expectedOutputSchema:   true,
-			expectedStructuredData: true,
+			name:                 "version 2025-06-18 capabilities",
+			version:              "2025-06-18",
+			expectedOutputSchema: true,
 		},
 	}
 
@@ -111,10 +107,9 @@ func TestMCPProtocolVersionCapabilities(t *testing.T) {
 				"tools": map[string]any{},
 			}
 
-			// Add structured output support for version 2025-06-18
+			// Add outputSchema support for version 2025-06-18 (standard MCP capability)
 			if tt.version == "2025-06-18" {
 				capabilities["tools"].(map[string]any)["outputSchema"] = true
-				capabilities["tools"].(map[string]any)["structuredData"] = true
 			}
 
 			tools := capabilities["tools"].(map[string]any)
@@ -127,17 +122,6 @@ func TestMCPProtocolVersionCapabilities(t *testing.T) {
 			} else {
 				if hasOutputSchema {
 					t.Errorf("Unexpected outputSchema capability for version %s", tt.version)
-				}
-			}
-
-			structuredData, hasStructuredData := tools["structuredData"]
-			if tt.expectedStructuredData {
-				if !hasStructuredData || structuredData != true {
-					t.Errorf("Expected structuredData capability for version %s", tt.version)
-				}
-			} else {
-				if hasStructuredData {
-					t.Errorf("Unexpected structuredData capability for version %s", tt.version)
 				}
 			}
 		})
@@ -350,25 +334,23 @@ func TestMCPProtocolVersionBackwardsCompatibility(t *testing.T) {
 					"tools": map[string]any{},
 				}
 
-				// Add structured output support for version 2025-06-18
+				// Add outputSchema support for version 2025-06-18 (standard MCP capability)
 				if tt.version == "2025-06-18" {
 					capabilities["tools"].(map[string]any)["outputSchema"] = true
-					capabilities["tools"].(map[string]any)["structuredData"] = true
 				}
 
 				tools := capabilities["tools"].(map[string]any)
 
-				// Verify that only 2025-06-18 has the new capabilities
+				// Verify that only 2025-06-18 has the outputSchema capability
 				_, hasOutputSchema := tools["outputSchema"]
-				_, hasStructuredData := tools["structuredData"]
 
 				if tt.version == "2025-06-18" {
-					if !hasOutputSchema || !hasStructuredData {
-						t.Errorf("Version %s should have outputSchema and structuredData capabilities", tt.version)
+					if !hasOutputSchema {
+						t.Errorf("Version %s should have outputSchema capability", tt.version)
 					}
 				} else {
-					if hasOutputSchema || hasStructuredData {
-						t.Errorf("Version %s should not have outputSchema or structuredData capabilities", tt.version)
+					if hasOutputSchema {
+						t.Errorf("Version %s should not have outputSchema capability", tt.version)
 					}
 				}
 			}

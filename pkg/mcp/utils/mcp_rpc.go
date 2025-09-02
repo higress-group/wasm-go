@@ -16,6 +16,7 @@ package utils
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -38,15 +39,15 @@ func OnMCPToolCallSuccess(ctx wrapper.HttpContext, content []map[string]any, deb
 	}, debugInfo)
 }
 
-// OnMCPToolCallSuccessWithStructuredData sends a successful MCP tool response with structured data
-// (MCP Protocol Version 2025-06-18)
-func OnMCPToolCallSuccessWithStructuredData(ctx wrapper.HttpContext, content []map[string]any, structuredData map[string]any, debugInfo string) {
+// OnMCPToolCallSuccessWithStructuredContent sends a successful MCP tool response with structured content
+// According to MCP spec, structuredContent is a field in tool results, not a capability
+func OnMCPToolCallSuccessWithStructuredContent(ctx wrapper.HttpContext, content []map[string]any, structuredContent map[string]any, debugInfo string) {
 	response := map[string]any{
 		"content": content,
 		"isError": false,
 	}
-	if structuredData != nil && len(structuredData) > 0 {
-		response["structuredData"] = structuredData
+	if structuredContent != nil && len(structuredContent) > 0 {
+		response["structuredContent"] = structuredContent
 	}
 	OnMCPResponseSuccess(ctx, response, debugInfo)
 }
@@ -94,21 +95,13 @@ func SendMCPToolImageResult(ctx wrapper.HttpContext, image []byte, contentType s
 		},
 	}
 
-	// Check protocol version for automatic format selection
-	protocolVersion := ctx.GetStringContext("MCP_PROTOCOL_VERSION", "")
-	if protocolVersion == "2025-06-18" {
-		// For 2025-06-18, we could include structured data if needed
-		// For now, just use the enhanced response format (ready for future extensions)
-		OnMCPToolCallSuccessWithStructuredData(ctx, content, nil, responseDebugInfo)
-	} else {
-		// For older versions, use traditional response
-		OnMCPToolCallSuccess(ctx, content, responseDebugInfo)
-	}
+	// Use traditional response format since no structured data is provided
+	OnMCPToolCallSuccess(ctx, content, responseDebugInfo)
 }
 
-// SendMCPToolImageWithStructuredResult sends an image result with structured data
-// (MCP Protocol Version 2025-06-18)
-func SendMCPToolImageWithStructuredResult(ctx wrapper.HttpContext, image []byte, contentType string, structuredData map[string]any, debugInfo ...string) {
+// SendMCPToolResult automatically chooses the appropriate response format based on protocol version
+// This is the recommended function to use for sending tool results
+func SendMCPToolResult(ctx wrapper.HttpContext, textResult string, debugInfo ...string) {
 	responseDebugInfo := "mcp:tools/call::result"
 	if len(debugInfo) > 0 {
 		responseDebugInfo = debugInfo[0]
@@ -116,25 +109,20 @@ func SendMCPToolImageWithStructuredResult(ctx wrapper.HttpContext, image []byte,
 
 	content := []map[string]any{
 		{
-			"type":     "image",
-			"data":     base64.StdEncoding.EncodeToString(image),
-			"mimeType": contentType,
+			"type": "text",
+			"text": textResult,
 		},
 	}
 
-	// Check protocol version for automatic format selection
-	protocolVersion := ctx.GetStringContext("MCP_PROTOCOL_VERSION", "")
-	if protocolVersion == "2025-06-18" && structuredData != nil && len(structuredData) > 0 {
-		OnMCPToolCallSuccessWithStructuredData(ctx, content, structuredData, responseDebugInfo)
-	} else {
-		// For older versions or when no structured data, use traditional response
-		OnMCPToolCallSuccess(ctx, content, responseDebugInfo)
-	}
+	// Since we don't have actual structured data, use the traditional format
+	// The protocol version difference is mainly for capability advertisement, not response format
+	OnMCPToolCallSuccess(ctx, content, responseDebugInfo)
 }
 
-// SendMCPToolStructuredResult sends a tool result with both text content and structured data
-// (MCP Protocol Version 2025-06-18)
-func SendMCPToolStructuredResult(ctx wrapper.HttpContext, result string, structuredData map[string]any, debugInfo ...string) {
+// SendMCPToolResultWithStructuredContent sends a tool result with both text content and structured content
+// According to MCP spec, for backward compatibility, tools that return structured content
+// SHOULD also return the serialized JSON in a TextContent block
+func SendMCPToolResultWithStructuredContent(ctx wrapper.HttpContext, textResult string, structuredContent map[string]any, debugInfo ...string) {
 	responseDebugInfo := "mcp:tools/call::result"
 	if len(debugInfo) > 0 {
 		responseDebugInfo = debugInfo[0]
@@ -142,64 +130,36 @@ func SendMCPToolStructuredResult(ctx wrapper.HttpContext, result string, structu
 	content := []map[string]any{
 		{
 			"type": "text",
-			"text": result,
+			"text": textResult,
 		},
 	}
-	OnMCPToolCallSuccessWithStructuredData(ctx, content, structuredData, responseDebugInfo)
+	OnMCPToolCallSuccessWithStructuredContent(ctx, content, structuredContent, responseDebugInfo)
 }
 
-// SendMCPToolStructuredOnlyResult sends a tool result with only structured data
-// (MCP Protocol Version 2025-06-18)
-func SendMCPToolStructuredOnlyResult(ctx wrapper.HttpContext, structuredData map[string]any, debugInfo ...string) {
+// SendMCPToolStructuredResult sends a tool result with structured content only
+func SendMCPToolStructuredResult(ctx wrapper.HttpContext, structuredContent map[string]any, debugInfo ...string) {
 	responseDebugInfo := "mcp:tools/call::result"
 	if len(debugInfo) > 0 {
 		responseDebugInfo = debugInfo[0]
 	}
-	OnMCPToolCallSuccessWithStructuredData(ctx, []map[string]any{}, structuredData, responseDebugInfo)
-}
-
-// SendMCPToolResult automatically chooses the appropriate response format based on protocol version
-// This is the recommended function to use for sending tool results
-func SendMCPToolResult(ctx wrapper.HttpContext, textResult string, structuredData map[string]any, debugInfo ...string) {
-	responseDebugInfo := "mcp:tools/call::result"
-	if len(debugInfo) > 0 {
-		responseDebugInfo = debugInfo[0]
+	// For backward compatibility, include serialized JSON as text content
+	jsonBytes, _ := json.Marshal(structuredContent)
+	content := []map[string]any{
+		{
+			"type": "text",
+			"text": string(jsonBytes),
+		},
 	}
-
-	// Check protocol version stored during initialization
-	protocolVersion := ctx.GetStringContext("MCP_PROTOCOL_VERSION", "")
-
-	// For protocol version 2025-06-18 and later, include structured data if provided
-	if protocolVersion == "2025-06-18" && structuredData != nil && len(structuredData) > 0 {
-		content := []map[string]any{
-			{
-				"type": "text",
-				"text": textResult,
-			},
-		}
-		OnMCPToolCallSuccessWithStructuredData(ctx, content, structuredData, responseDebugInfo)
-	} else {
-		// For older versions or when no structured data, use traditional text response
-		SendMCPToolTextResult(ctx, textResult, debugInfo...)
-	}
+	OnMCPToolCallSuccessWithStructuredContent(ctx, content, structuredContent, responseDebugInfo)
 }
 
 // SendMCPToolResultWithContent automatically chooses the appropriate response format
 // and allows custom content array (for images, etc.)
-func SendMCPToolResultWithContent(ctx wrapper.HttpContext, content []map[string]any, structuredData map[string]any, debugInfo ...string) {
+func SendMCPToolResultWithContent(ctx wrapper.HttpContext, content []map[string]any, debugInfo ...string) {
 	responseDebugInfo := "mcp:tools/call::result"
 	if len(debugInfo) > 0 {
 		responseDebugInfo = debugInfo[0]
 	}
 
-	// Check protocol version stored during initialization
-	protocolVersion := ctx.GetStringContext("MCP_PROTOCOL_VERSION", "")
-
-	// For protocol version 2025-06-18 and later, include structured data if provided
-	if protocolVersion == "2025-06-18" && structuredData != nil && len(structuredData) > 0 {
-		OnMCPToolCallSuccessWithStructuredData(ctx, content, structuredData, responseDebugInfo)
-	} else {
-		// For older versions or when no structured data, use traditional response
-		OnMCPToolCallSuccess(ctx, content, responseDebugInfo)
-	}
+	OnMCPToolCallSuccess(ctx, content, responseDebugInfo)
 }
