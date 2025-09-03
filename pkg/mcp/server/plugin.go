@@ -315,15 +315,9 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 			"tools": map[string]any{},
 		}
 
-		// Add outputSchema capability for version 2025-06-18 (MCP standard)
-		if version == "2025-06-18" {
-			capabilities["tools"].(map[string]any)["outputSchema"] = true
-		}
-
 		// Note: The protocol version differences are mainly reflected in:
 		// 1. Tool definitions (outputSchema field in tools/list response)
 		// 2. Tool response format (structured output when available)
-		// Rather than just in capabilities declaration during initialization
 
 		utils.OnMCPResponseSuccess(ctx, map[string]any{
 			"protocolVersion": version,

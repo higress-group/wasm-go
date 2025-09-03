@@ -1003,30 +1003,13 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 					},
 				}
 
-				// Check if tool has outputSchema defined and try to parse response as structured content
-				var structuredContent map[string]any
-				if t.toolConfig.OutputSchema != nil && len(t.toolConfig.OutputSchema) > 0 {
-					// For images, we might want to include metadata in structured content
-					structuredContent = map[string]any{
-						"contentType": contentType,
-						"size":        len(responseBody),
-					}
-					// Try to include additional metadata from headers if available
-					if headerMap != nil {
-						if lastModified := headerMap["Last-Modified"]; lastModified != "" {
-							structuredContent["lastModified"] = lastModified
-						}
-						if etag := headerMap["ETag"]; etag != "" {
-							structuredContent["etag"] = etag
-						}
-					}
-				}
-
-				if structuredContent != nil {
-					utils.SendMCPToolResultWithStructuredContent(ctx, string(responseBody), structuredContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
-				} else {
-					utils.SendMCPToolResultWithContent(ctx, imageContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
-				}
+				// For image responses, only use structuredContent if there's meaningful structured information
+				// (e.g., recognition results, tags, analysis data), not just basic metadata like contentType/size
+				// According to MCP spec: structuredContent is for structured content (like JSON objects),
+				// while content array can contain text, image, audio etc. non-structured content.
+				// Just returning an image (type: "image") without additional structured information
+				// doesn't require assembling a structuredContent field.
+				utils.SendMCPToolResultWithContent(ctx, imageContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
 				return
 			}
 
@@ -1067,14 +1050,10 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 						// If it's not a map, wrap it in a map
 						structuredContent = map[string]any{"data": jsonResponse}
 					}
-				} else {
-					// If not valid JSON, create structured content with metadata
-					structuredContent = map[string]any{
-						"contentType":   contentType,
-						"contentLength": len(responseBody),
-						"statusCode":    statusCode,
-					}
 				}
+				// If not valid JSON, don't force structuredContent creation
+				// Standard approach: use isError: true + error text (type: "text")
+				// Only add structuredContent when there's a structured need for errors
 			}
 
 			// Send the result using structured content if available

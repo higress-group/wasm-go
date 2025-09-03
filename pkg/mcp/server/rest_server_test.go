@@ -79,24 +79,20 @@ func TestMCPProtocolVersionSupport(t *testing.T) {
 
 func TestMCPProtocolVersionCapabilities(t *testing.T) {
 	tests := []struct {
-		name                 string
-		version              string
-		expectedOutputSchema bool
+		name    string
+		version string
 	}{
 		{
-			name:                 "version 2024-11-05 capabilities",
-			version:              "2024-11-05",
-			expectedOutputSchema: false,
+			name:    "version 2024-11-05 capabilities",
+			version: "2024-11-05",
 		},
 		{
-			name:                 "version 2025-03-26 capabilities",
-			version:              "2025-03-26",
-			expectedOutputSchema: false,
+			name:    "version 2025-03-26 capabilities",
+			version: "2025-03-26",
 		},
 		{
-			name:                 "version 2025-06-18 capabilities",
-			version:              "2025-06-18",
-			expectedOutputSchema: true,
+			name:    "version 2025-06-18 capabilities",
+			version: "2025-06-18",
 		},
 	}
 
@@ -107,22 +103,9 @@ func TestMCPProtocolVersionCapabilities(t *testing.T) {
 				"tools": map[string]any{},
 			}
 
-			// Add outputSchema support for version 2025-06-18 (standard MCP capability)
-			if tt.version == "2025-06-18" {
-				capabilities["tools"].(map[string]any)["outputSchema"] = true
-			}
-
-			tools := capabilities["tools"].(map[string]any)
-
-			outputSchema, hasOutputSchema := tools["outputSchema"]
-			if tt.expectedOutputSchema {
-				if !hasOutputSchema || outputSchema != true {
-					t.Errorf("Expected outputSchema capability for version %s", tt.version)
-				}
-			} else {
-				if hasOutputSchema {
-					t.Errorf("Unexpected outputSchema capability for version %s", tt.version)
-				}
+			// Verify basic capabilities structure
+			if capabilities["tools"] == nil {
+				t.Errorf("Expected tools capability to exist for version %s", tt.version)
 			}
 		})
 	}
@@ -334,24 +317,9 @@ func TestMCPProtocolVersionBackwardsCompatibility(t *testing.T) {
 					"tools": map[string]any{},
 				}
 
-				// Add outputSchema support for version 2025-06-18 (standard MCP capability)
-				if tt.version == "2025-06-18" {
-					capabilities["tools"].(map[string]any)["outputSchema"] = true
-				}
-
-				tools := capabilities["tools"].(map[string]any)
-
-				// Verify that only 2025-06-18 has the outputSchema capability
-				_, hasOutputSchema := tools["outputSchema"]
-
-				if tt.version == "2025-06-18" {
-					if !hasOutputSchema {
-						t.Errorf("Version %s should have outputSchema capability", tt.version)
-					}
-				} else {
-					if hasOutputSchema {
-						t.Errorf("Version %s should not have outputSchema capability", tt.version)
-					}
+				// Verify basic capabilities structure
+				if capabilities["tools"] == nil {
+					t.Errorf("Expected tools capability to exist for version %s", tt.version)
 				}
 			}
 		})
