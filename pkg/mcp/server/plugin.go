@@ -33,7 +33,19 @@ import (
 const (
 	DefaultMaxBodyBytes   uint32 = 100 * 1024 * 1024
 	GlobalToolRegistryKey        = "GlobalToolRegistry"
+
+	// Supported MCP protocol versions
+	MCPProtocolVersion20241105 = "2024-11-05"
+	MCPProtocolVersion20250326 = "2025-03-26"
+	MCPProtocolVersion20250618 = "2025-06-18"
 )
+
+// SupportedMCPVersions contains all supported MCP protocol versions
+var SupportedMCPVersions = []string{
+	MCPProtocolVersion20241105,
+	MCPProtocolVersion20250326,
+	MCPProtocolVersion20250618,
+}
 
 type HttpContext wrapper.HttpContext
 
@@ -294,9 +306,8 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		}
 
 		// Support for multiple protocol versions including 2025-06-18
-		supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
 		versionSupported := false
-		for _, supportedVersion := range supportedVersions {
+		for _, supportedVersion := range SupportedMCPVersions {
 			if version == supportedVersion {
 				versionSupported = true
 				break
@@ -515,9 +526,8 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types
 	protocolVersion, _ := proxywasm.GetHttpRequestHeader("MCP-Protocol-Version")
 	if protocolVersion != "" {
 		// Validate the protocol version against supported versions
-		supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
 		versionSupported := false
-		for _, supportedVersion := range supportedVersions {
+		for _, supportedVersion := range SupportedMCPVersions {
 			if protocolVersion == supportedVersion {
 				versionSupported = true
 				break
