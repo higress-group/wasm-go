@@ -308,9 +308,6 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 			return nil
 		}
 
-		// Store protocol version in context for later use
-		ctx.SetContext("MCP_PROTOCOL_VERSION", version)
-
 		utils.OnMCPResponseSuccess(ctx, map[string]any{
 			"protocolVersion": version,
 			"capabilities": map[string]any{
@@ -528,8 +525,6 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types
 		}
 
 		if versionSupported {
-			// Store protocol version in context for later use by MCP response functions
-			ctx.SetContext("MCP_PROTOCOL_VERSION", protocolVersion)
 			log.Debugf("MCP Protocol Version set from header: %s", protocolVersion)
 		} else {
 			log.Warnf("Unsupported MCP Protocol Version in header: %s", protocolVersion)
