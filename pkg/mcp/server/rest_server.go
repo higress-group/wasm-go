@@ -703,9 +703,9 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 
 		// Send the result using structured content if available
 		if structuredContent != nil {
-			utils.SendMCPToolResultWithStructuredContent(ctx, result, structuredContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+			utils.SendMCPToolTextResultWithStructuredContent(ctx, result, structuredContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
 		} else {
-			utils.SendMCPToolResult(ctx, result, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+			utils.SendMCPToolTextResult(ctx, result, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
 		}
 		return nil
 	}
@@ -1044,9 +1044,9 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 
 			// Send the result using structured content if available
 			if structuredContent != nil {
-				utils.SendMCPToolResultWithStructuredContent(ctx, result, structuredContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+				utils.SendMCPToolTextResultWithStructuredContent(ctx, result, structuredContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
 			} else {
-				utils.SendMCPToolResult(ctx, result, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+				utils.SendMCPToolTextResult(ctx, result, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
 			}
 		})
 	if err != nil {
