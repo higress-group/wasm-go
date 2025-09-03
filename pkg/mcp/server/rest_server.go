@@ -994,22 +994,8 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 			contentType := headerMap[strings.ToLower("Content-Type")]
 			// Check if the response is an image
 			if strings.HasPrefix(contentType, "image/") {
-				// Handle image response by sending it as an MCP tool result with automatic protocol handling
-				imageContent := []map[string]any{
-					{
-						"type":     "image",
-						"data":     base64.StdEncoding.EncodeToString(responseBody),
-						"mimeType": contentType,
-					},
-				}
-
-				// For image responses, only use structuredContent if there's meaningful structured information
-				// (e.g., recognition results, tags, analysis data), not just basic metadata like contentType/size
-				// According to MCP spec: structuredContent is for structured content (like JSON objects),
-				// while content array can contain text, image, audio etc. non-structured content.
-				// Just returning an image (type: "image") without additional structured information
-				// doesn't require assembling a structuredContent field.
-				utils.SendMCPToolResultWithContent(ctx, imageContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+				// Handle image response by sending it as an MCP tool result
+				utils.SendMCPToolImageResult(ctx, responseBody, contentType, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
 				return
 			}
 

@@ -311,17 +311,11 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		// Store protocol version in context for later use
 		ctx.SetContext("MCP_PROTOCOL_VERSION", version)
 
-		capabilities := map[string]any{
-			"tools": map[string]any{},
-		}
-
-		// Note: The protocol version differences are mainly reflected in:
-		// 1. Tool definitions (outputSchema field in tools/list response)
-		// 2. Tool response format (structured output when available)
-
 		utils.OnMCPResponseSuccess(ctx, map[string]any{
 			"protocolVersion": version,
-			"capabilities":    capabilities,
+			"capabilities": map[string]any{
+				"tools": map[string]any{},
+			},
 			"serverInfo": map[string]any{
 				"name":    currentServerNameForHandlers, // Use the actual server name (single or composed)
 				"version": "1.0.0",
