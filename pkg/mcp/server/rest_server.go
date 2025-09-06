@@ -691,13 +691,12 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 		}
 		result = templateResult
 
-		// Check if tool has outputSchema and create structured content from arguments
-		var structuredContent map[string]any
+		// Check if tool has outputSchema and try to parse templateResult as structured content
+		var structuredContent json.RawMessage
 		if t.toolConfig.OutputSchema != nil && len(t.toolConfig.OutputSchema) > 0 {
-			// For direct response tools, use the processed arguments as structured content
-			structuredContent = map[string]any{
-				"arguments": t.arguments,
-				"template":  "direct_response",
+			// For direct response tools, check if templateResult is valid JSON
+			if json.Valid([]byte(result)) {
+				structuredContent = json.RawMessage(result)
 			}
 		}
 
@@ -1024,18 +1023,11 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 			}
 
 			// Check if tool has outputSchema and try to parse response as structured content
-			var structuredContent map[string]any
+			var structuredContent json.RawMessage
 			if t.toolConfig.OutputSchema != nil && len(t.toolConfig.OutputSchema) > 0 {
 				// Try to parse response as JSON for structured content
-				var jsonResponse interface{}
-				if err := json.Unmarshal(responseBody, &jsonResponse); err == nil {
-					// Successfully parsed as JSON, use as structured content
-					if jsonMap, ok := jsonResponse.(map[string]any); ok {
-						structuredContent = jsonMap
-					} else {
-						// If it's not a map, wrap it in a map
-						structuredContent = map[string]any{"data": jsonResponse}
-					}
+				if json.Valid(responseBody) {
+					structuredContent = json.RawMessage(responseBody)
 				}
 				// If not valid JSON, don't force structuredContent creation
 				// Standard approach: use isError: true + error text (type: "text")

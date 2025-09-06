@@ -16,6 +16,7 @@ package utils
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -40,7 +41,7 @@ func OnMCPToolCallSuccess(ctx wrapper.HttpContext, content []map[string]any, deb
 
 // OnMCPToolCallSuccessWithStructuredContent sends a successful MCP tool response with structured content
 // According to MCP spec, structuredContent is a field in tool results, not a capability
-func OnMCPToolCallSuccessWithStructuredContent(ctx wrapper.HttpContext, content []map[string]any, structuredContent map[string]any, debugInfo string) {
+func OnMCPToolCallSuccessWithStructuredContent(ctx wrapper.HttpContext, content []map[string]any, structuredContent json.RawMessage, debugInfo string) {
 	response := map[string]any{
 		"content": content,
 		"isError": false,
@@ -101,7 +102,7 @@ func SendMCPToolImageResult(ctx wrapper.HttpContext, image []byte, contentType s
 // SendMCPToolTextResultWithStructuredContent sends a tool result with both text content and structured content
 // According to MCP spec, for backward compatibility, tools that return structured content
 // SHOULD also return the serialized JSON in a TextContent block
-func SendMCPToolTextResultWithStructuredContent(ctx wrapper.HttpContext, textResult string, structuredContent map[string]any, debugInfo ...string) {
+func SendMCPToolTextResultWithStructuredContent(ctx wrapper.HttpContext, textResult string, structuredContent json.RawMessage, debugInfo ...string) {
 	responseDebugInfo := "mcp:tools/call::result"
 	if len(debugInfo) > 0 {
 		responseDebugInfo = debugInfo[0]
