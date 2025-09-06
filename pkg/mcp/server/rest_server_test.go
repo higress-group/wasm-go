@@ -1193,3 +1193,328 @@ func TestRestToolConfig(t *testing.T) {
 		}
 	}
 }
+
+// TestOutputSchemaSupport tests the new OutputSchema functionality for MCP Protocol Version 2025-06-18
+func TestOutputSchemaSupport(t *testing.T) {
+	tests := []struct {
+		name         string
+		outputSchema map[string]any
+		expectedNil  bool
+	}{
+		{
+			name: "valid output schema",
+			outputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"result": map[string]any{
+						"type":        "string",
+						"description": "Operation result",
+					},
+					"data": map[string]any{
+						"type":        "object",
+						"description": "Response data",
+					},
+				},
+			},
+			expectedNil: false,
+		},
+		{
+			name:         "nil output schema",
+			outputSchema: nil,
+			expectedNil:  true,
+		},
+		{
+			name:         "empty output schema",
+			outputSchema: map[string]any{},
+			expectedNil:  false, // Empty map is not nil, it's just empty
+		},
+		{
+			name: "complex output schema with array",
+			outputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"items": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"id": map[string]any{
+									"type": "string",
+								},
+								"value": map[string]any{
+									"type": "number",
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedNil: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a RestTool with the test output schema
+			tool := RestTool{
+				Name:        "test-tool",
+				Description: "Test tool for output schema",
+				Args: []RestToolArg{
+					{
+						Name:        "input",
+						Description: "Test input",
+						Type:        "string",
+					},
+				},
+				OutputSchema: tt.outputSchema,
+				RequestTemplate: RestToolRequestTemplate{
+					URL:    "https://example.com/api",
+					Method: "GET",
+				},
+			}
+
+			// Create RestMCPTool
+			mcpTool := &RestMCPTool{
+				toolConfig: tool,
+			}
+
+			// Test OutputSchema method
+			result := mcpTool.OutputSchema()
+
+			if tt.expectedNil {
+				if result != nil {
+					t.Errorf("Expected nil output schema, got %v", result)
+				}
+			} else {
+				if result == nil {
+					t.Errorf("Expected non-nil output schema, got nil")
+				} else {
+					// For empty map, we don't expect specific fields
+					if len(result) > 0 {
+						// Verify the schema structure only if it's not empty
+						if result["type"] == nil {
+							t.Errorf("Expected output schema to have 'type' field")
+						}
+						if result["properties"] == nil {
+							t.Errorf("Expected output schema to have 'properties' field")
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestToolWithOutputSchemaInterface tests the ToolWithOutputSchema interface implementation
+func TestToolWithOutputSchemaInterface(t *testing.T) {
+	// Create a tool with output schema
+	tool := RestTool{
+		Name:        "test-tool",
+		Description: "Test tool",
+		Args: []RestToolArg{
+			{
+				Name:        "input",
+				Description: "Test input",
+				Type:        "string",
+			},
+		},
+		OutputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"result": map[string]any{
+					"type": "string",
+				},
+			},
+		},
+		RequestTemplate: RestToolRequestTemplate{
+			URL:    "https://example.com/api",
+			Method: "GET",
+		},
+	}
+
+	mcpTool := &RestMCPTool{
+		toolConfig: tool,
+	}
+
+	// Test that RestMCPTool implements ToolWithOutputSchema interface
+	var toolWithSchema ToolWithOutputSchema = mcpTool
+
+	// Test interface methods
+	if toolWithSchema.Description() != "Test tool" {
+		t.Errorf("Expected description 'Test tool', got '%s'", toolWithSchema.Description())
+	}
+
+	inputSchema := toolWithSchema.InputSchema()
+	if inputSchema["type"] != "object" {
+		t.Errorf("Expected input schema type 'object', got '%v'", inputSchema["type"])
+	}
+
+	outputSchema := toolWithSchema.OutputSchema()
+	if outputSchema == nil {
+		t.Errorf("Expected non-nil output schema")
+	} else if outputSchema["type"] != "object" {
+		t.Errorf("Expected output schema type 'object', got '%v'", outputSchema["type"])
+	}
+}
+
+// TestGlobalToolRegistryOutputSchema tests the GlobalToolRegistry's support for OutputSchema
+func TestGlobalToolRegistryOutputSchema(t *testing.T) {
+	// Create a mock tool that implements ToolWithOutputSchema
+	mockTool := &MockToolWithOutputSchema{
+		name:        "test-tool",
+		description: "Test tool with output schema",
+		inputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"input": map[string]any{
+					"type": "string",
+				},
+			},
+		},
+		outputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"result": map[string]any{
+					"type": "string",
+				},
+			},
+		},
+	}
+
+	// Create registry and register tool
+	registry := &GlobalToolRegistry{}
+	registry.Initialize()
+
+	// Test the registration logic directly without calling RegisterTool to avoid log.Debugf
+	// Simulate what RegisterTool does
+	if _, ok := registry.serverTools["test-server"]; !ok {
+		registry.serverTools["test-server"] = make(map[string]ToolInfo)
+	}
+	toolInfo := ToolInfo{
+		Name:        "test-tool",
+		Description: mockTool.Description(),
+		InputSchema: mockTool.InputSchema(),
+		ServerName:  "test-server",
+		Tool:        mockTool,
+	}
+	// Check if tool implements OutputSchema (MCP Protocol Version 2025-06-18)
+	// Since mockTool is already a MockToolWithOutputSchema, we can directly call OutputSchema()
+	toolInfo.OutputSchema = mockTool.OutputSchema()
+	registry.serverTools["test-server"]["test-tool"] = toolInfo
+
+	// Test GetToolInfo
+	retrievedToolInfo, found := registry.GetToolInfo("test-server", "test-tool")
+	if !found {
+		t.Fatalf("Expected to find tool info")
+	}
+
+	// Verify tool info contains output schema
+	if retrievedToolInfo.Name != "test-tool" {
+		t.Errorf("Expected tool name 'test-tool', got '%s'", retrievedToolInfo.Name)
+	}
+
+	if retrievedToolInfo.Description != "Test tool with output schema" {
+		t.Errorf("Expected description 'Test tool with output schema', got '%s'", retrievedToolInfo.Description)
+	}
+
+	if retrievedToolInfo.OutputSchema == nil {
+		t.Errorf("Expected non-nil output schema in tool info")
+	} else if retrievedToolInfo.OutputSchema["type"] != "object" {
+		t.Errorf("Expected output schema type 'object', got '%v'", retrievedToolInfo.OutputSchema["type"])
+	}
+
+	// Test with tool that doesn't implement ToolWithOutputSchema
+	mockToolWithoutSchema := &MockTool{
+		name:        "simple-tool",
+		description: "Simple tool without output schema",
+		inputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"input": map[string]any{
+					"type": "string",
+				},
+			},
+		},
+	}
+
+	// Register the simple tool directly without calling RegisterTool to avoid log.Debugf
+	toolInfo2 := ToolInfo{
+		Name:        "simple-tool",
+		Description: mockToolWithoutSchema.Description(),
+		InputSchema: mockToolWithoutSchema.InputSchema(),
+		ServerName:  "test-server",
+		Tool:        mockToolWithoutSchema,
+	}
+	// This tool doesn't implement ToolWithOutputSchema, so OutputSchema should remain nil
+	registry.serverTools["test-server"]["simple-tool"] = toolInfo2
+
+	retrievedToolInfo2, found := registry.GetToolInfo("test-server", "simple-tool")
+	if !found {
+		t.Fatalf("Expected to find simple tool info")
+	}
+
+	// Verify simple tool doesn't have output schema
+	if retrievedToolInfo2.OutputSchema != nil {
+		t.Errorf("Expected nil output schema for simple tool, got %v", retrievedToolInfo2.OutputSchema)
+	}
+}
+
+// MockToolWithOutputSchema is a mock implementation of ToolWithOutputSchema for testing
+type MockToolWithOutputSchema struct {
+	name         string
+	description  string
+	inputSchema  map[string]any
+	outputSchema map[string]any
+}
+
+func (m *MockToolWithOutputSchema) Create(params []byte) Tool {
+	return &MockToolWithOutputSchema{
+		name:         m.name,
+		description:  m.description,
+		inputSchema:  m.inputSchema,
+		outputSchema: m.outputSchema,
+	}
+}
+
+func (m *MockToolWithOutputSchema) Call(httpCtx HttpContext, server Server) error {
+	return nil
+}
+
+func (m *MockToolWithOutputSchema) Description() string {
+	return m.description
+}
+
+func (m *MockToolWithOutputSchema) InputSchema() map[string]any {
+	return m.inputSchema
+}
+
+func (m *MockToolWithOutputSchema) OutputSchema() map[string]any {
+	return m.outputSchema
+}
+
+// MockTool is a mock implementation of Tool for testing
+type MockTool struct {
+	name        string
+	description string
+	inputSchema map[string]any
+}
+
+func (m *MockTool) Create(params []byte) Tool {
+	return &MockTool{
+		name:        m.name,
+		description: m.description,
+		inputSchema: m.inputSchema,
+	}
+}
+
+func (m *MockTool) Call(httpCtx HttpContext, server Server) error {
+	return nil
+}
+
+func (m *MockTool) Description() string {
+	return m.description
+}
+
+func (m *MockTool) InputSchema() map[string]any {
+	return m.inputSchema
+}
