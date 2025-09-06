@@ -18,11 +18,15 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/tidwall/sjson"
 )
+
+// supportedVersions is a helper variable for tests
+var supportedVersions = []string{"2024-11-05", "2025-03-26", "2025-06-18"}
 
 func TestMCPProtocolVersionSupport(t *testing.T) {
 	tests := []struct {
@@ -60,14 +64,7 @@ func TestMCPProtocolVersionSupport(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Test the version validation logic
-			supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
-			versionSupported := false
-			for _, supportedVersion := range supportedVersions {
-				if tt.version == supportedVersion {
-					versionSupported = true
-					break
-				}
-			}
+			versionSupported := slices.Contains(supportedVersions, tt.version)
 
 			if versionSupported != tt.shouldBeSupported {
 				t.Errorf("Version %s support check failed: expected %v, got %v",
@@ -161,14 +158,7 @@ func TestMCPProtocolVersionHeaderParsing(t *testing.T) {
 			// Test the header parsing logic (simulating the onHttpRequestHeaders function)
 			if tt.headerValue != "" {
 				// Validate the protocol version against supported versions
-				supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
-				versionSupported := false
-				for _, supportedVersion := range supportedVersions {
-					if tt.headerValue == supportedVersion {
-						versionSupported = true
-						break
-					}
-				}
+				versionSupported := slices.Contains(supportedVersions, tt.headerValue)
 
 				if tt.shouldSetCtx && !versionSupported {
 					t.Errorf("Expected version %s to be supported but it was not", tt.headerValue)
@@ -230,30 +220,14 @@ func TestMCPProtocolVersionContextFlow(t *testing.T) {
 
 			// Step 1: Header processing (onHttpRequestHeaders)
 			if tt.headerVersion != "" {
-				supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
-				versionSupported := false
-				for _, supportedVersion := range supportedVersions {
-					if tt.headerVersion == supportedVersion {
-						versionSupported = true
-						break
-					}
-				}
-				if versionSupported {
+				if slices.Contains(supportedVersions, tt.headerVersion) {
 					contextVersion = tt.headerVersion
 				}
 			}
 
 			// Step 2: Initialize method processing (may override)
 			if tt.initializeVersion != "" {
-				supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
-				versionSupported := false
-				for _, supportedVersion := range supportedVersions {
-					if tt.initializeVersion == supportedVersion {
-						versionSupported = true
-						break
-					}
-				}
-				if versionSupported {
+				if slices.Contains(supportedVersions, tt.initializeVersion) {
 					contextVersion = tt.initializeVersion
 				}
 			}
@@ -297,14 +271,7 @@ func TestMCPProtocolVersionBackwardsCompatibility(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Test initialize method response
-			supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
-			versionSupported := false
-			for _, supportedVersion := range supportedVersions {
-				if tt.version == supportedVersion {
-					versionSupported = true
-					break
-				}
-			}
+			versionSupported := slices.Contains(supportedVersions, tt.version)
 
 			if versionSupported != tt.expectsInitializeOK {
 				t.Errorf("Version %s initialize support mismatch: expected %v, got %v",
@@ -373,16 +340,7 @@ func TestMCPProtocolVersionErrorHandling(t *testing.T) {
 			if tt.version == "" {
 				err = errors.New("Unsupported protocol version")
 			} else {
-				supportedVersions := []string{"2024-11-05", "2025-03-26", "2025-06-18"}
-				versionSupported := false
-				for _, supportedVersion := range supportedVersions {
-					if tt.version == supportedVersion {
-						versionSupported = true
-						break
-					}
-				}
-
-				if !versionSupported {
+				if !slices.Contains(supportedVersions, tt.version) {
 					err = fmt.Errorf("Unsupported protocol version: %s", tt.version)
 				}
 			}

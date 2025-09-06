@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -34,18 +35,10 @@ const (
 	DefaultMaxBodyBytes   uint32 = 100 * 1024 * 1024
 	GlobalToolRegistryKey        = "GlobalToolRegistry"
 
-	// Supported MCP protocol versions
-	MCPProtocolVersion20241105 = "2024-11-05"
-	MCPProtocolVersion20250326 = "2025-03-26"
-	MCPProtocolVersion20250618 = "2025-06-18"
 )
 
 // SupportedMCPVersions contains all supported MCP protocol versions
-var SupportedMCPVersions = []string{
-	MCPProtocolVersion20241105,
-	MCPProtocolVersion20250326,
-	MCPProtocolVersion20250618,
-}
+var SupportedMCPVersions = []string{"2024-11-05", "2025-03-26", "2025-06-18"}
 
 type HttpContext wrapper.HttpContext
 
@@ -306,15 +299,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		}
 
 		// Support for multiple protocol versions including 2025-06-18
-		versionSupported := false
-		for _, supportedVersion := range SupportedMCPVersions {
-			if version == supportedVersion {
-				versionSupported = true
-				break
-			}
-		}
-
-		if !versionSupported {
+		if !slices.Contains(SupportedMCPVersions, version) {
 			utils.OnMCPResponseError(ctx, fmt.Errorf("Unsupported protocol version: %s", version), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
 			return nil
 		}
@@ -526,15 +511,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types
 	protocolVersion, _ := proxywasm.GetHttpRequestHeader("MCP-Protocol-Version")
 	if protocolVersion != "" {
 		// Validate the protocol version against supported versions
-		versionSupported := false
-		for _, supportedVersion := range SupportedMCPVersions {
-			if protocolVersion == supportedVersion {
-				versionSupported = true
-				break
-			}
-		}
-
-		if versionSupported {
+		if slices.Contains(SupportedMCPVersions, protocolVersion) {
 			log.Debugf("MCP Protocol Version set from header: %s", protocolVersion)
 		} else {
 			log.Warnf("Unsupported MCP Protocol Version in header: %s", protocolVersion)
