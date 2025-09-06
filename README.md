@@ -1,4 +1,4 @@
-## Intro
+# WASM Go SDK
 
 This SDK is used to develop the WASM Plugins for Higress in Go.
 
@@ -46,12 +46,12 @@ metadata:
 spec:
   defaultConfig:
     block_urls:
-    - "swagger.html"
+      - "swagger.html"
   url: oci://<your_registry_hub>/request-block:1.0.0
 ```
 
 When the resource is applied on the Kubernetes cluster with `kubectl apply -f <your-wasm-plugin-yaml>`,
-the request will be blocked if the string `swagger.html` in the url. 
+the request will be blocked if the string `swagger.html` in the url.
 
 ```bash
 curl <your_gateway_address>/api/user/swagger.html
@@ -74,31 +74,31 @@ metadata:
   namespace: higress-system
 spec:
   defaultConfig:
-   # this config will take effect globally (all incoming requests not matched by rules below)
-   block_urls:
-   - "swagger.html"
+    # this config will take effect globally (all incoming requests not matched by rules below)
+    block_urls:
+      - "swagger.html"
   matchRules:
-  # ingress-level takes effect
-  - ingress:
-    - default/foo
-    # the ingress foo in namespace default will use this config
-    config:
-      block_bodies:
-      - "foo"
-  - ingress:
-    - default/bar
-    # the ingress bar in namespace default will use this config
-    config:
-      block_bodies:
-      - "bar"
-  # domain-level takes effect
-  - domain:
-    - "*.example.com"
-    # if the request's domain matched, this config will be used
-    config:
-      block_bodies:
-       - "foo"
-       - "bar"
+    # ingress-level takes effect
+    - ingress:
+        - default/foo
+      # the ingress foo in namespace default will use this config
+      config:
+        block_bodies:
+          - "foo"
+    - ingress:
+        - default/bar
+      # the ingress bar in namespace default will use this config
+      config:
+        block_bodies:
+          - "bar"
+    # domain-level takes effect
+    - domain:
+        - "*.example.com"
+      # if the request's domain matched, this config will be used
+      config:
+        block_bodies:
+          - "foo"
+          - "bar"
   url: oci://<your_registry_hub>/request-block:1.0.0
 ```
 
@@ -107,3 +107,109 @@ The rules will be matched in the order of configuration. If one match is found, 
 ## Unit Testing
 
 For comprehensive unit testing support, see our [Test Framework Documentation](pkg/test/README.md).
+
+## MCP (Model Context Protocol) Support
+
+This SDK provides comprehensive support for MCP (Model Context Protocol), including the latest features from MCP protocol version 2025-06-18.
+
+### Output Schema Support
+
+Output schema allows tools to define the structure of their response data, enabling better type safety and validation for MCP clients.
+
+#### Example: REST Tool with Output Schema
+
+```yaml
+server:
+  name: weather-api
+  config:
+    apiKey: "your-api-key"
+tools:
+  - name: get_weather
+    description: "Get current weather information"
+    args:
+      - name: city
+        type: string
+        description: "City name"
+        required: true
+      - name: units
+        type: string
+        description: "Temperature units"
+        enum: ["celsius", "fahrenheit"]
+        default: "celsius"
+    outputSchema:
+      type: object
+      properties:
+        temperature:
+          type: number
+          description: "Current temperature"
+        humidity:
+          type: number
+          description: "Humidity percentage"
+        condition:
+          type: string
+          description: "Weather condition"
+        city:
+          type: string
+          description: "City name"
+      required: ["temperature", "condition", "city"]
+    requestTemplate:
+      url: "https://api.weather.com/v3/weather?city={{.args.city}}&units={{.args.units}}&key={{.config.apiKey}}"
+      method: "GET"
+    responseTemplate:
+      body: "{{.}}"
+```
+
+#### Example: Direct Response Tool with Output Schema
+
+```yaml
+server:
+  name: calculator
+tools:
+  - name: add_numbers
+    description: "Add two numbers"
+    args:
+      - name: a
+        type: number
+        description: "First number"
+        required: true
+      - name: b
+        type: number
+        description: "Second number"
+        required: true
+    outputSchema:
+      type: object
+      properties:
+        result:
+          type: number
+          description: "Sum of the two numbers"
+        operation:
+          type: string
+          description: "Operation performed"
+      required: ["result", "operation"]
+    responseTemplate:
+      body: |
+        {
+          "result": {{add .args.a .args.b}},
+          "operation": "addition"
+        }
+```
+
+### MCP Protocol Versions
+
+The SDK supports multiple MCP protocol versions:
+
+- **2024-11-05**: Initial MCP specification
+- **2025-03-26**: Enhanced tool capabilities
+- **2025-06-18**: Output schema support (latest)
+
+### Features
+
+- ✅ REST API integration with template support
+- ✅ Structured data handling with JSON validation
+- ✅ Output schema for type-safe responses
+- ✅ Security scheme support (HTTP Basic, Bearer, API Key)
+- ✅ Tool composition and toolsets
+- ✅ Comprehensive error handling
+- ✅ Full backward compatibility
+
+For more detailed MCP documentation, see [pkg/mcp/validator/README.md](pkg/mcp/validator/README.md).

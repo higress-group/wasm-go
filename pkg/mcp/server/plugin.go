@@ -34,7 +34,6 @@ import (
 const (
 	DefaultMaxBodyBytes   uint32 = 100 * 1024 * 1024
 	GlobalToolRegistryKey        = "GlobalToolRegistry"
-
 )
 
 // SupportedMCPVersions contains all supported MCP protocol versions
