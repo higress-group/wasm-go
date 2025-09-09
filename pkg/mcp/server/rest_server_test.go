@@ -74,40 +74,6 @@ func TestMCPProtocolVersionSupport(t *testing.T) {
 	}
 }
 
-func TestMCPProtocolVersionCapabilities(t *testing.T) {
-	tests := []struct {
-		name    string
-		version string
-	}{
-		{
-			name:    "version 2024-11-05 capabilities",
-			version: "2024-11-05",
-		},
-		{
-			name:    "version 2025-03-26 capabilities",
-			version: "2025-03-26",
-		},
-		{
-			name:    "version 2025-06-18 capabilities",
-			version: "2025-06-18",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Simulate the capabilities logic from the initialize method
-			capabilities := map[string]any{
-				"tools": map[string]any{},
-			}
-
-			// Verify basic capabilities structure
-			if capabilities["tools"] == nil {
-				t.Errorf("Expected tools capability to exist for version %s", tt.version)
-			}
-		})
-	}
-}
-
 func TestMCPProtocolVersionHeaderParsing(t *testing.T) {
 	tests := []struct {
 		name          string
