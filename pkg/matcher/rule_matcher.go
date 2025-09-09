@@ -36,6 +36,7 @@ const (
 	Service
 	RoutePrefix
 	RouteAndService
+	RoutePrefixAndConsumer
 )
 
 type MatchType int
@@ -52,7 +53,10 @@ const (
 	MATCH_DOMAIN_KEY       = "_match_domain_"
 	MATCH_SERVICE_KEY      = "_match_service_"
 	MATCH_ROUTE_PREFIX_KEY = "_match_route_prefix_"
+	MATCH_CONSUMER_KEY     = "_match_consumer_"
 )
+
+const ConsumerHeaderKey = "x-mse-consumer"
 
 type HostMatcher struct {
 	matchType MatchType
@@ -64,6 +68,7 @@ type RuleConfig[PluginConfig any] struct {
 	routes       map[string]struct{}
 	services     map[string]struct{}
 	routePrefixs map[string]struct{}
+	consumers    map[string]struct{}
 	hosts        []HostMatcher
 	config       PluginConfig
 }
@@ -172,6 +177,17 @@ func (m RuleMatcher[PluginConfig]) GetMatchConfig() (*PluginConfig, error) {
 				}
 			}
 		}
+		// category == RoutePrefixAndConsumer
+		if rule.category == RoutePrefixAndConsumer {
+			consumer, _ := proxywasm.GetHttpRequestHeader(ConsumerHeaderKey)
+			for routePrefix := range rule.routePrefixs {
+				if strings.HasPrefix(string(routeName), routePrefix) {
+					if _, ok := rule.consumers[consumer]; ok {
+						return &rule.config, nil
+					}
+				}
+			}
+		}
 	}
 	if m.hasGlobalConfig {
 		return &m.globalConfig, nil
@@ -226,10 +242,12 @@ func (m *RuleMatcher[PluginConfig]) ParseRuleConfig(context iface.PluginContext,
 		rule.hosts = m.parseHostMatchConfig(ruleJson)
 		rule.services = m.parseServiceMatchConfig(ruleJson)
 		rule.routePrefixs = m.parseRoutePrefixMatchConfig(ruleJson)
+		rule.consumers = m.parseConsumerMatchConfig(ruleJson)
 		hasRoute := len(rule.routes) != 0
 		hasHosts := len(rule.hosts) != 0
 		hasService := len(rule.services) != 0
 		hasRoutePrefix := len(rule.routePrefixs) != 0
+		hasConsumer := len(rule.consumers) != 0
 		if boolToInt(hasRoute)+boolToInt(hasService)+boolToInt(hasHosts)+boolToInt(hasRoutePrefix) == 0 {
 			return errors.New("there is at least one of  '_match_route_', '_match_domain_', '_match_service_' and '_match_route_prefix_' can present in configuration.")
 		}
@@ -242,6 +260,8 @@ func (m *RuleMatcher[PluginConfig]) ParseRuleConfig(context iface.PluginContext,
 			rule.category = Host
 		} else if hasService {
 			rule.category = Service
+		} else if hasRoutePrefix && hasConsumer {
+			rule.category = RoutePrefixAndConsumer
 		} else {
 			rule.category = RoutePrefix
 		}
@@ -314,6 +334,18 @@ func (m RuleMatcher[PluginConfig]) parseRouteMatchConfig(config gjson.Result) ma
 		}
 	}
 	return routes
+}
+
+func (m RuleMatcher[PluginConfig]) parseConsumerMatchConfig(config gjson.Result) map[string]struct{} {
+	keys := config.Get(MATCH_CONSUMER_KEY).Array()
+	consumers := make(map[string]struct{})
+	for _, item := range keys {
+		consumer := item.String()
+		if consumer != "" {
+			consumers[consumer] = struct{}{}
+		}
+	}
+	return consumers
 }
 
 func (m RuleMatcher[PluginConfig]) parseRoutePrefixMatchConfig(config gjson.Result) map[string]struct{} {
