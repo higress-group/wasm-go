@@ -192,6 +192,8 @@ tools:
           "result": {{add .args.a .args.b}},
           "operation": "addition"
         }
+```
+
 ### MCP Protocol Versions
 
 The SDK supports multiple MCP protocol versions:
