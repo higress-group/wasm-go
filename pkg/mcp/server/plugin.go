@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -35,6 +36,9 @@ const (
 	GlobalToolRegistryKey        = "GlobalToolRegistry"
 )
 
+// SupportedMCPVersions contains all supported MCP protocol versions
+var SupportedMCPVersions = []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+
 type HttpContext wrapper.HttpContext
 
 type Context struct {
@@ -49,11 +53,12 @@ var globalContext Context
 
 // ToolInfo stores information about a tool for the global registry.
 type ToolInfo struct {
-	Name        string
-	Description string
-	InputSchema map[string]any
-	ServerName  string // Original server name
-	Tool        Tool   // The actual tool instance for cloning
+	Name         string
+	Description  string
+	InputSchema  map[string]any
+	OutputSchema map[string]any // New field for MCP Protocol Version 2025-06-18
+	ServerName   string         // Original server name
+	Tool         Tool           // The actual tool instance for cloning
 }
 
 // GlobalToolRegistry holds all tools from all servers.
@@ -72,13 +77,18 @@ func (r *GlobalToolRegistry) RegisterTool(serverName string, toolName string, to
 	if _, ok := r.serverTools[serverName]; !ok {
 		r.serverTools[serverName] = make(map[string]ToolInfo)
 	}
-	r.serverTools[serverName][toolName] = ToolInfo{
+	toolInfo := ToolInfo{
 		Name:        toolName,
 		Description: tool.Description(),
 		InputSchema: tool.InputSchema(),
 		ServerName:  serverName,
 		Tool:        tool,
 	}
+	// Check if tool implements OutputSchema (MCP Protocol Version 2025-06-18)
+	if toolWithSchema, ok := tool.(ToolWithOutputSchema); ok {
+		toolInfo.OutputSchema = toolWithSchema.OutputSchema()
+	}
+	r.serverTools[serverName][toolName] = toolInfo
 	log.Debugf("Registered tool %s/%s", serverName, toolName)
 }
 
@@ -120,6 +130,14 @@ type Tool interface {
 	Call(httpCtx HttpContext, server Server) error
 	Description() string
 	InputSchema() map[string]any
+}
+
+// ToolWithOutputSchema is an optional interface for tools that support output schema
+// (MCP Protocol Version 2025-06-18). Tools can optionally implement this interface
+// to provide output schema information.
+type ToolWithOutputSchema interface {
+	Tool
+	OutputSchema() map[string]any
 }
 
 // ToolSetConfig defines the configuration for a toolset.
@@ -276,7 +294,15 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		version := params.Get("protocolVersion").String()
 		if version == "" {
 			utils.OnMCPResponseError(ctx, errors.New("Unsupported protocol version"), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
+			return nil
 		}
+
+		// Support for multiple protocol versions including 2025-06-18
+		if !slices.Contains(SupportedMCPVersions, version) {
+			utils.OnMCPResponseError(ctx, fmt.Errorf("Unsupported protocol version: %s", version), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
+			return nil
+		}
+
 		utils.OnMCPResponseSuccess(ctx, map[string]any{
 			"protocolVersion": version,
 			"capabilities": map[string]any{
@@ -318,11 +344,18 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 					continue
 				}
 			}
-			listedTools = append(listedTools, map[string]any{
+			toolDef := map[string]any{
 				"name":        toolFullName,
 				"description": tool.Description(),
 				"inputSchema": tool.InputSchema(),
-			})
+			}
+			// Add outputSchema if tool implements ToolWithOutputSchema (MCP Protocol Version 2025-06-18)
+			if toolWithSchema, ok := tool.(ToolWithOutputSchema); ok {
+				if outputSchema := toolWithSchema.OutputSchema(); outputSchema != nil && len(outputSchema) > 0 {
+					toolDef["outputSchema"] = outputSchema
+				}
+			}
+			listedTools = append(listedTools, toolDef)
 		}
 		utils.OnMCPResponseSuccess(ctx, map[string]any{
 			"tools": listedTools,
@@ -470,6 +503,22 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types
 	ctx.DisableReroute()
 	ctx.SetRequestBodyBufferLimit(DefaultMaxBodyBytes)
 	ctx.SetResponseBodyBufferLimit(DefaultMaxBodyBytes)
+
+	// Parse MCP-Protocol-Version header and store in context
+	// This allows clients to specify the MCP protocol version via HTTP header
+	// instead of only through the JSON-RPC initialize method
+	protocolVersion, _ := proxywasm.GetHttpRequestHeader("MCP-Protocol-Version")
+	if protocolVersion != "" {
+		// Validate the protocol version against supported versions
+		if slices.Contains(SupportedMCPVersions, protocolVersion) {
+			log.Debugf("MCP Protocol Version set from header: %s", protocolVersion)
+		} else {
+			log.Warnf("Unsupported MCP Protocol Version in header: %s", protocolVersion)
+		}
+
+		// Remove the header from the request to prevent it from being forwarded
+		proxywasm.RemoveHttpRequestHeader("MCP-Protocol-Version")
+	}
 
 	if ctx.Method() == "GET" {
 		proxywasm.SendHttpResponseWithDetail(405, "not_support_sse_on_this_endpoint", nil, nil, -1)

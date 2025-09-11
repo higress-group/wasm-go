@@ -16,7 +16,9 @@ package utils
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
@@ -35,6 +37,19 @@ func OnMCPToolCallSuccess(ctx wrapper.HttpContext, content []map[string]any, deb
 		"content": content,
 		"isError": false,
 	}, debugInfo)
+}
+
+// OnMCPToolCallSuccessWithStructuredContent sends a successful MCP tool response with structured content
+// According to MCP spec, structuredContent is a field in tool results, not a capability
+func OnMCPToolCallSuccessWithStructuredContent(ctx wrapper.HttpContext, content []map[string]any, structuredContent json.RawMessage, debugInfo string) {
+	response := map[string]any{
+		"content": content,
+		"isError": false,
+	}
+	if structuredContent != nil && len(structuredContent) > 0 {
+		response["structuredContent"] = structuredContent
+	}
+	OnMCPResponseSuccess(ctx, response, debugInfo)
 }
 
 func OnMCPToolCallError(ctx wrapper.HttpContext, err error, debugInfo ...string) {
@@ -71,11 +86,32 @@ func SendMCPToolImageResult(ctx wrapper.HttpContext, image []byte, contentType s
 	if len(debugInfo) > 0 {
 		responseDebugInfo = debugInfo[0]
 	}
-	OnMCPToolCallSuccess(ctx, []map[string]any{
+
+	content := []map[string]any{
 		{
 			"type":     "image",
 			"data":     base64.StdEncoding.EncodeToString(image),
 			"mimeType": contentType,
 		},
-	}, responseDebugInfo)
+	}
+
+	// Use traditional response format since no structured data is provided
+	OnMCPToolCallSuccess(ctx, content, responseDebugInfo)
+}
+
+// SendMCPToolTextResultWithStructuredContent sends a tool result with both text content and structured content
+// According to MCP spec, for backward compatibility, tools that return structured content
+// SHOULD also return the serialized JSON in a TextContent block
+func SendMCPToolTextResultWithStructuredContent(ctx wrapper.HttpContext, textResult string, structuredContent json.RawMessage, debugInfo ...string) {
+	responseDebugInfo := "mcp:tools/call::result"
+	if len(debugInfo) > 0 {
+		responseDebugInfo = debugInfo[0]
+	}
+	content := []map[string]any{
+		{
+			"type": "text",
+			"text": textResult,
+		},
+	}
+	OnMCPToolCallSuccessWithStructuredContent(ctx, content, structuredContent, responseDebugInfo)
 }

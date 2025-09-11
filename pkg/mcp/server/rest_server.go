@@ -87,6 +87,7 @@ type RestTool struct {
 	Description           string                   `json:"description"`
 	Security              SecurityRequirement      `json:"security,omitempty"` // Tool-level security for MCP Client to MCP Server
 	Args                  []RestToolArg            `json:"args"`
+	OutputSchema          map[string]any           `json:"outputSchema,omitempty"` // Output schema for MCP Protocol Version 2025-06-18
 	RequestTemplate       RestToolRequestTemplate  `json:"requestTemplate,omitempty"`
 	ResponseTemplate      RestToolResponseTemplate `json:"responseTemplate"`
 	ErrorResponseTemplate string                   `json:"errorResponseTemplate"`
@@ -689,8 +690,22 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 			return fmt.Errorf("error executing response template: %v", err)
 		}
 		result = templateResult
-		// Send the result
-		utils.SendMCPToolTextResult(ctx, result, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+
+		// Check if tool has outputSchema and try to parse templateResult as structured content
+		var structuredContent json.RawMessage
+		if t.toolConfig.OutputSchema != nil && len(t.toolConfig.OutputSchema) > 0 {
+			// For direct response tools, check if templateResult is valid JSON
+			if json.Valid([]byte(result)) {
+				structuredContent = json.RawMessage(result)
+			}
+		}
+
+		// Send the result using structured content if available
+		if structuredContent != nil {
+			utils.SendMCPToolTextResultWithStructuredContent(ctx, result, structuredContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+		} else {
+			utils.SendMCPToolTextResult(ctx, result, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+		}
 		return nil
 	}
 
@@ -1006,7 +1021,25 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 			if result == "" {
 				result = "success"
 			}
-			utils.SendMCPToolTextResult(ctx, result, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+
+			// Check if tool has outputSchema and try to parse response as structured content
+			var structuredContent json.RawMessage
+			if t.toolConfig.OutputSchema != nil && len(t.toolConfig.OutputSchema) > 0 {
+				// Try to parse response as JSON for structured content
+				if json.Valid(responseBody) {
+					structuredContent = json.RawMessage(responseBody)
+				}
+				// If not valid JSON, don't force structuredContent creation
+				// Standard approach: use isError: true + error text (type: "text")
+				// Only add structuredContent when there's a structured need for errors
+			}
+
+			// Send the result using structured content if available
+			if structuredContent != nil {
+				utils.SendMCPToolTextResultWithStructuredContent(ctx, result, structuredContent, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+			} else {
+				utils.SendMCPToolTextResult(ctx, result, fmt.Sprintf("mcp:tools/call:%s/%s:result", t.serverName, t.name))
+			}
 		})
 	if err != nil {
 		utils.OnMCPToolCallError(ctx, errors.New("route failed"))
@@ -1077,6 +1110,11 @@ func (t *RestMCPTool) InputSchema() map[string]any {
 	}
 
 	return schema
+}
+
+// OutputSchema implements Tool interface (MCP Protocol Version 2025-06-18)
+func (t *RestMCPTool) OutputSchema() map[string]any {
+	return t.toolConfig.OutputSchema
 }
 
 func convertHeaders(responseHeaders [][2]string) map[string]string {
