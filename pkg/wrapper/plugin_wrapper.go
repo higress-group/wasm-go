@@ -86,6 +86,8 @@ type CommonVmCtx[PluginConfig any] struct {
 	onHttpResponseBody          onHttpBodyFunc[PluginConfig]
 	onHttpStreamingResponseBody onHttpStreamingBodyFunc[PluginConfig]
 	onHttpStreamDone            onHttpStreamDoneFunc[PluginConfig]
+	rebuildAfterRequests        uint64 // Number of requests after which to trigger rebuild
+	requestCount                uint64 // Current request count
 }
 
 type TickFuncEntry struct {
@@ -401,6 +403,19 @@ func (o *logOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
 
 func WithLogger[PluginConfig any](logger log.Log) CtxOption[PluginConfig] {
 	return &logOption[PluginConfig]{logger}
+}
+
+type rebuildOption[PluginConfig any] struct {
+	rebuildAfterRequests uint64
+}
+
+func (o *rebuildOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
+	ctx.rebuildAfterRequests = o.rebuildAfterRequests
+	ctx.requestCount = 0
+}
+
+func WithRebuildAfterRequests[PluginConfig any](requestCount uint64) CtxOption[PluginConfig] {
+	return &rebuildOption[PluginConfig]{rebuildAfterRequests: requestCount}
 }
 
 type prePluginOption[PluginConfig any] struct {
@@ -858,6 +873,16 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 	ctx.executionPhase = iface.DecodeHeader
 	requestID, _ := proxywasm.GetHttpRequestHeader("x-request-id")
 	_ = proxywasm.SetProperty([]string{"x_request_id"}, []byte(requestID))
+
+	// Increment request count and check rebuild condition
+	if ctx.plugin.vm.rebuildAfterRequests > 0 {
+		ctx.plugin.vm.requestCount++
+		if ctx.plugin.vm.requestCount >= ctx.plugin.vm.rebuildAfterRequests {
+			proxywasm.SetProperty([]string{"wasm_rebuild"}, []byte("true"))
+			ctx.plugin.vm.log.Infof("Plugin reached rebuild threshold after %d requests, rebuild flag set", ctx.plugin.vm.requestCount)
+		}
+	}
+
 	config, err := ctx.plugin.GetMatchConfig()
 	if err != nil {
 		ctx.plugin.vm.log.Errorf("get match config failed, err:%v", err)
