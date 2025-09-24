@@ -86,7 +86,7 @@ func TestRestMCPServerConfig(t *testing.T) {
 			host, status := test.NewTestHost(restMCPServerConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
-			
+
 			config, err := host.GetMatchConfig()
 			require.NoError(t, err)
 			require.NotNil(t, config)
@@ -101,7 +101,7 @@ func TestMcpProxyServerConfig(t *testing.T) {
 			host, status := test.NewTestHost(mcpProxyServerConfig)
 			defer host.Reset()
 			require.Equal(t, types.OnPluginStartStatusOK, status)
-			
+
 			config, err := host.GetMatchConfig()
 			require.NoError(t, err)
 			require.NotNil(t, config)
@@ -122,7 +122,7 @@ func TestRestMCPServerToolsList(t *testing.T) {
 			"method": "tools/list",
 			"params": {}
 		}`
-		
+
 		// 初始化HTTP上下文
 		host.InitHttp()
 
@@ -136,7 +136,7 @@ func TestRestMCPServerToolsList(t *testing.T) {
 
 		// 处理请求体
 		action = host.CallOnHttpRequestBody([]byte(toolsListRequest))
-		
+
 		// 验证响应
 		localResponse := host.GetLocalResponse()
 		if localResponse != nil {
@@ -153,7 +153,7 @@ func TestRestMCPServerToolsList(t *testing.T) {
 			// 验证tools列表
 			result, ok := response["result"].(map[string]interface{})
 			require.True(t, ok)
-			
+
 			tools, ok := result["tools"].([]interface{})
 			require.True(t, ok)
 			require.Greater(t, len(tools), 0)
@@ -201,7 +201,7 @@ func TestRestMCPServerToolsCall(t *testing.T) {
 
 		// 处理请求体 - 这会触发外部HTTP调用
 		action = host.CallOnHttpRequestBody([]byte(toolsCallRequest))
-		
+
 		// Mock HTTP响应 - 模拟外部API调用
 		host.CallOnHttpCall([][2]string{
 			{":status", "200"},
@@ -261,7 +261,7 @@ func TestMcpProxyServerToolsList(t *testing.T) {
 
 		// 处理请求体 - 这会触发MCP初始化流程
 		action = host.CallOnHttpRequestBody([]byte(toolsListRequest))
-		
+
 		// Mock MCP初始化响应
 		initResponse := `{
 			"jsonrpc": "2.0",
@@ -320,7 +320,7 @@ func TestMcpProxyServerToolsCall(t *testing.T) {
 
 		// 处理请求体
 		action = host.CallOnHttpRequestBody([]byte(toolsCallRequest))
-		
+
 		// Mock tools/call响应
 		toolsCallResponse := `{
 			"jsonrpc": "2.0",

@@ -150,9 +150,3 @@ go test -bench=. -benchmem
 2. 实际部署时需要根据具体需求调整配置
 3. 测试中的mock数据仅用于验证功能流程
 4. 生产环境使用时需要配置真实的后端MCP服务器地址
-
-## 相关文档
-
-- [MCP代理功能规格文档](../../specs/001-mcp-mcp-server/spec.md)
-- [快速开始指南](../../specs/001-mcp-mcp-server/quickstart.md)
-- [实现计划](../../specs/001-mcp-mcp-server/plan.md)
