@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -54,7 +55,15 @@ func compileWasm() (string, error) {
 
 	// Execute wasm compilation command
 	cmd := exec.Command("go", "build", "-buildmode=c-shared", "-o", outputPath, "./")
-	cmd.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+
+	// Filter out existing GOOS and GOARCH to avoid conflicts
+	filteredEnv := []string{}
+	for _, env := range os.Environ() {
+		if !strings.HasPrefix(env, "GOOS=") && !strings.HasPrefix(env, "GOARCH=") {
+			filteredEnv = append(filteredEnv, env)
+		}
+	}
+	cmd.Env = append(filteredEnv, "GOOS=wasip1", "GOARCH=wasm")
 	cmd.Dir = workDir
 
 	// Run the command and capture output
