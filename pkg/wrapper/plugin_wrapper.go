@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1085,6 +1086,13 @@ func (ctx *CommonHttpCtx[PluginConfig]) RouteCall(method, rawURL string, headers
 
 func recoverFunc() {
 	if r := recover(); r != nil {
+		// Check if panic recovery is disabled via environment variable
+		if os.Getenv("WASM_DISABLE_PANIC_RECOVERY") == "true" {
+			// Re-panic to preserve the original panic for debugging
+			panic(r)
+		}
+
+		// Default behavior: recover and log the panic
 		const size = 64 << 10
 		buf := make([]byte, size)
 		buf = buf[:runtime.Stack(buf, false)]

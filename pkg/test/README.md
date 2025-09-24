@@ -40,11 +40,12 @@ Runs tests only in Wasm mode using intelligent wasm file path detection in wazer
 #### `RunWasmTestWithPath(t *testing.T, wasmPath string, f func(*testing.T))`
 Runs tests only in Wasm mode with a specified wasm file path. This function allows callers to specify custom wasm file paths for testing.
 
-**Note**: To run tests in wasm mode, you need to compile a wasm binary. The framework supports multiple ways to specify the wasm file path:
+**Note**: The framework automatically compiles wasm binaries when needed. The framework supports multiple ways to specify the wasm file path:
 
 1. **Environment Variable**: Set `WASM_FILE_PATH` environment variable
 2. **Custom Path**: Use `RunWasmTestWithPath()` or `RunTestWithPath()` functions
-3. **Auto-detection**: The framework automatically detects common wasm file locations
+3. **Auto-compilation**: The framework automatically compiles wasm binariy with a fixed filename (`wasm-unit-test.wasm`)
+4. **Debug-Friendly**: Panics are preserved in test environment for better debugging, while still recovered in production
 
 #### Common Wasm file Path
 
