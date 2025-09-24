@@ -212,37 +212,71 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		serverConfigJsonForInstance = serverJson.Get("config").Raw
 		log.Infof("Parsing single server configuration: %s", config.serverName)
 
+		// Check server type to determine which type of server to create
+		serverType := serverJson.Get("type").String()
+
 		// Original logic for single server
-		toolsJson := configJson.Get("tools") // These are REST tools for this server instance
+		toolsJson := configJson.Get("tools") // These are REST tools for this server instance or MCP proxy tools
 		if toolsJson.Exists() && len(toolsJson.Array()) > 0 {
-			// Create REST-to-MCP server
-			restServer := NewRestMCPServer(config.serverName)         // Pass the server name
-			restServer.SetConfig([]byte(serverConfigJsonForInstance)) // Pass the server's specific config
+			if serverType == "mcp-proxy" {
+				// Create MCP-proxy server
+				proxyServer := NewMcpProxyServer(config.serverName)
+				proxyServer.SetConfig([]byte(serverConfigJsonForInstance))
 
-			securitySchemesJson := serverJson.Get("securitySchemes")
-			if securitySchemesJson.Exists() {
-				for _, schemeJson := range securitySchemesJson.Array() {
-					var scheme SecurityScheme
-					if err := json.Unmarshal([]byte(schemeJson.Raw), &scheme); err != nil {
-						return fmt.Errorf("failed to parse security scheme config: %v", err)
+				securitySchemesJson := serverJson.Get("securitySchemes")
+				if securitySchemesJson.Exists() {
+					for _, schemeJson := range securitySchemesJson.Array() {
+						var scheme SecurityScheme
+						if err := json.Unmarshal([]byte(schemeJson.Raw), &scheme); err != nil {
+							return fmt.Errorf("failed to parse security scheme config: %v", err)
+						}
+						proxyServer.AddSecurityScheme(scheme)
 					}
-					restServer.AddSecurityScheme(scheme)
-				}
-			}
-
-			for _, toolJson := range toolsJson.Array() {
-				var restTool RestTool
-				if err := json.Unmarshal([]byte(toolJson.Raw), &restTool); err != nil {
-					return fmt.Errorf("failed to parse tool config: %v", err)
 				}
 
-				if err := restServer.AddRestTool(restTool); err != nil {
-					return fmt.Errorf("failed to add tool %s: %v", restTool.Name, err)
+				for _, toolJson := range toolsJson.Array() {
+					var proxyTool McpProxyToolConfig
+					if err := json.Unmarshal([]byte(toolJson.Raw), &proxyTool); err != nil {
+						return fmt.Errorf("failed to parse proxy tool config: %v", err)
+					}
+
+					if err := proxyServer.AddProxyTool(proxyTool); err != nil {
+						return fmt.Errorf("failed to add proxy tool %s: %v", proxyTool.Name, err)
+					}
+					// Register tool to registry
+					opts.ToolRegistry.RegisterTool(config.serverName, proxyTool.Name, proxyServer.GetMCPTools()[proxyTool.Name])
 				}
-				// Register tool to registry
-				opts.ToolRegistry.RegisterTool(config.serverName, restTool.Name, restServer.GetMCPTools()[restTool.Name])
+				config.server = proxyServer
+			} else {
+				// Create REST-to-MCP server (default behavior)
+				restServer := NewRestMCPServer(config.serverName)         // Pass the server name
+				restServer.SetConfig([]byte(serverConfigJsonForInstance)) // Pass the server's specific config
+
+				securitySchemesJson := serverJson.Get("securitySchemes")
+				if securitySchemesJson.Exists() {
+					for _, schemeJson := range securitySchemesJson.Array() {
+						var scheme SecurityScheme
+						if err := json.Unmarshal([]byte(schemeJson.Raw), &scheme); err != nil {
+							return fmt.Errorf("failed to parse security scheme config: %v", err)
+						}
+						restServer.AddSecurityScheme(scheme)
+					}
+				}
+
+				for _, toolJson := range toolsJson.Array() {
+					var restTool RestTool
+					if err := json.Unmarshal([]byte(toolJson.Raw), &restTool); err != nil {
+						return fmt.Errorf("failed to parse tool config: %v", err)
+					}
+
+					if err := restServer.AddRestTool(restTool); err != nil {
+						return fmt.Errorf("failed to add tool %s: %v", restTool.Name, err)
+					}
+					// Register tool to registry
+					opts.ToolRegistry.RegisterTool(config.serverName, restTool.Name, restServer.GetMCPTools()[restTool.Name])
+				}
+				config.server = restServer
 			}
-			config.server = restServer
 		} else {
 			// Logic for pre-registered Go-based servers (non-REST)
 			if opts.SkipPreRegisteredServers {

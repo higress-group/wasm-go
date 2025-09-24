@@ -6,3 +6,6 @@ out
 coverage.xml
 .idea/
 .vscode/
+.cursor/
+.specify/
+specs/
