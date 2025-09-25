@@ -223,6 +223,18 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				proxyServer := NewMcpProxyServer(config.serverName)
 				proxyServer.SetConfig([]byte(serverConfigJsonForInstance))
 
+				// Parse mcpServerURL
+				mcpServerURL := serverJson.Get("mcpServerURL").String()
+				if mcpServerURL != "" {
+					proxyServer.SetMcpServerURL(mcpServerURL)
+				}
+
+				// Parse timeout
+				timeout := serverJson.Get("timeout").Int()
+				if timeout > 0 {
+					proxyServer.SetTimeout(int(timeout))
+				}
+
 				securitySchemesJson := serverJson.Get("securitySchemes")
 				if securitySchemesJson.Exists() {
 					for _, schemeJson := range securitySchemesJson.Array() {
@@ -232,6 +244,26 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 						}
 						proxyServer.AddSecurityScheme(scheme)
 					}
+				}
+
+				// Parse default downstream security
+				defaultDownstreamSecurityJson := serverJson.Get("defaultDownstreamSecurity")
+				if defaultDownstreamSecurityJson.Exists() {
+					var defaultDownstreamSecurity SecurityRequirement
+					if err := json.Unmarshal([]byte(defaultDownstreamSecurityJson.Raw), &defaultDownstreamSecurity); err != nil {
+						return fmt.Errorf("failed to parse defaultDownstreamSecurity config: %v", err)
+					}
+					proxyServer.SetDefaultDownstreamSecurity(defaultDownstreamSecurity)
+				}
+
+				// Parse default upstream security
+				defaultUpstreamSecurityJson := serverJson.Get("defaultUpstreamSecurity")
+				if defaultUpstreamSecurityJson.Exists() {
+					var defaultUpstreamSecurity SecurityRequirement
+					if err := json.Unmarshal([]byte(defaultUpstreamSecurityJson.Raw), &defaultUpstreamSecurity); err != nil {
+						return fmt.Errorf("failed to parse defaultUpstreamSecurity config: %v", err)
+					}
+					proxyServer.SetDefaultUpstreamSecurity(defaultUpstreamSecurity)
 				}
 
 				for _, toolJson := range toolsJson.Array() {
@@ -261,6 +293,26 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 						}
 						restServer.AddSecurityScheme(scheme)
 					}
+				}
+
+				// Parse default downstream security
+				defaultDownstreamSecurityJson := serverJson.Get("defaultDownstreamSecurity")
+				if defaultDownstreamSecurityJson.Exists() {
+					var defaultDownstreamSecurity SecurityRequirement
+					if err := json.Unmarshal([]byte(defaultDownstreamSecurityJson.Raw), &defaultDownstreamSecurity); err != nil {
+						return fmt.Errorf("failed to parse defaultDownstreamSecurity config: %v", err)
+					}
+					restServer.SetDefaultDownstreamSecurity(defaultDownstreamSecurity)
+				}
+
+				// Parse default upstream security
+				defaultUpstreamSecurityJson := serverJson.Get("defaultUpstreamSecurity")
+				if defaultUpstreamSecurityJson.Exists() {
+					var defaultUpstreamSecurity SecurityRequirement
+					if err := json.Unmarshal([]byte(defaultUpstreamSecurityJson.Raw), &defaultUpstreamSecurity); err != nil {
+						return fmt.Errorf("failed to parse defaultUpstreamSecurity config: %v", err)
+					}
+					restServer.SetDefaultUpstreamSecurity(defaultUpstreamSecurity)
 				}
 
 				for _, toolJson := range toolsJson.Array() {

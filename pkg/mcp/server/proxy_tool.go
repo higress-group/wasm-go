@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -36,6 +37,13 @@ const (
 	CtxMcpProxyToolArgs    = "mcp_proxy_tool_args"
 	CtxMcpProxyOperation   = "mcp_proxy_operation"
 )
+
+// ProxyAuthInfo holds authentication information for proxy tool calls
+type ProxyAuthInfo struct {
+	SecuritySchemeID      string          // RequestTemplate.Security.ID for gateway-to-backend auth
+	PassthroughCredential string          // Credential extracted from client request (if passthrough enabled)
+	Server                *McpProxyServer // Server instance for accessing security schemes
+}
 
 // McpProxyOperation represents the current operation type
 type McpProxyOperation string
@@ -61,7 +69,7 @@ func NewMcpProtocolHandler(backendURL string, timeout int) *McpProtocolHandler {
 }
 
 // Initialize performs the MCP protocol initialization sequence asynchronously
-func (h *McpProtocolHandler) Initialize(ctx wrapper.HttpContext) error {
+func (h *McpProtocolHandler) Initialize(ctx wrapper.HttpContext, authInfo *ProxyAuthInfo) error {
 	log.Infof("Starting MCP protocol initialization for %s", h.backendURL)
 
 	// Check if already initialized for this context
@@ -81,7 +89,7 @@ func (h *McpProtocolHandler) Initialize(ctx wrapper.HttpContext) error {
 	}
 
 	// Send initialize request to backend asynchronously
-	err = h.sendMcpRequest(ctx, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
+	err = h.sendMcpRequest(ctx, requestBody, authInfo, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 		// Don't resume here - either OnMCPResponseError will send response directly,
 		// or sendInitializedNotification will continue the async flow
 		if statusCode != 200 {
@@ -126,20 +134,23 @@ func (h *McpProtocolHandler) Initialize(ctx wrapper.HttpContext) error {
 		}
 
 		// Step 2: Send notifications/initialized
-		h.sendInitializedNotification(ctx)
+		h.sendInitializedNotification(ctx, authInfo)
 	})
 
 	return err
 }
 
 // ForwardToolsList forwards tools/list request to backend MCP server
-func (h *McpProtocolHandler) ForwardToolsList(ctx wrapper.HttpContext, cursor *string) error {
+func (h *McpProtocolHandler) ForwardToolsList(ctx wrapper.HttpContext, cursor *string, authInfo *ProxyAuthInfo) error {
 	log.Debugf("Forwarding tools/list request to %s", h.backendURL)
 
 	// Store the cursor for later execution
 	ctx.SetContext(CtxMcpProxyOperation, OpToolsList)
 	if cursor != nil {
 		ctx.SetContext("mcp_proxy_cursor", *cursor)
+	}
+	if authInfo != nil {
+		ctx.SetContext("mcp_proxy_auth_info", authInfo)
 	}
 
 	// Check if MCP is already initialized
@@ -149,7 +160,7 @@ func (h *McpProtocolHandler) ForwardToolsList(ctx wrapper.HttpContext, cursor *s
 	}
 
 	// Need to initialize first, which will execute tools/list in its callback
-	return h.Initialize(ctx)
+	return h.Initialize(ctx, authInfo)
 }
 
 // executeToolsList executes the actual tools/list request
@@ -175,8 +186,26 @@ func (h *McpProtocolHandler) executeToolsList(ctx wrapper.HttpContext) error {
 		headers = append(headers, [2]string{"Mcp-Session-Id", h.sessionID})
 	}
 
-	// Use RouteCall for the final tools/list request
-	return ctx.RouteCall("POST", h.backendURL, headers, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
+	// Start with the original backend URL
+	finalURL := h.backendURL
+
+	// Apply authentication if auth info was provided
+	if authInfoCtx := ctx.GetContext("mcp_proxy_auth_info"); authInfoCtx != nil {
+		if authInfo, ok := authInfoCtx.(*ProxyAuthInfo); ok && authInfo.SecuritySchemeID != "" {
+			// Apply authentication using shared utilities
+			modifiedURL, err := h.applyProxyAuthentication(authInfo.Server, authInfo.SecuritySchemeID, authInfo.PassthroughCredential, &headers)
+			if err != nil {
+				log.Errorf("Failed to apply authentication for tools/list request: %v", err)
+			} else {
+				// Use the modified URL if authentication was applied successfully
+				finalURL = modifiedURL
+				log.Debugf("Using modified URL for tools/list request: %s", finalURL)
+			}
+		}
+	}
+
+	// Use RouteCall for the final tools/list request with potentially modified URL
+	return ctx.RouteCall("POST", finalURL, headers, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 		if statusCode != 200 {
 			log.Errorf("Tools/list request failed with status %d: %s", statusCode, string(responseBody))
 			utils.OnMCPResponseError(ctx, fmt.Errorf("backend tools/list failed"), utils.ErrInternalError, "mcp-proxy:tools/list:backend_error")
@@ -207,13 +236,16 @@ func (h *McpProtocolHandler) executeToolsList(ctx wrapper.HttpContext) error {
 }
 
 // ForwardToolsCall forwards tools/call request to backend MCP server
-func (h *McpProtocolHandler) ForwardToolsCall(ctx wrapper.HttpContext, toolName string, arguments map[string]interface{}) error {
+func (h *McpProtocolHandler) ForwardToolsCall(ctx wrapper.HttpContext, toolName string, arguments map[string]interface{}, authInfo *ProxyAuthInfo) error {
 	log.Debugf("Forwarding tools/call request for tool %s to %s", toolName, h.backendURL)
 
 	// Store the tool call parameters for later execution
 	ctx.SetContext(CtxMcpProxyOperation, OpToolsCall)
 	ctx.SetContext(CtxMcpProxyToolName, toolName)
 	ctx.SetContext(CtxMcpProxyToolArgs, arguments)
+	if authInfo != nil {
+		ctx.SetContext("mcp_proxy_auth_info", authInfo)
+	}
 
 	// Check if MCP is already initialized
 	if initialized := ctx.GetContext(CtxMcpProxyInitialized); initialized != nil {
@@ -222,7 +254,7 @@ func (h *McpProtocolHandler) ForwardToolsCall(ctx wrapper.HttpContext, toolName 
 	}
 
 	// Need to initialize first, which will execute tools/call in its callback
-	return h.Initialize(ctx)
+	return h.Initialize(ctx, authInfo)
 }
 
 // executeToolsCall executes the actual tools/call request
@@ -245,8 +277,26 @@ func (h *McpProtocolHandler) executeToolsCall(ctx wrapper.HttpContext) error {
 		headers = append(headers, [2]string{"Mcp-Session-Id", h.sessionID})
 	}
 
-	// Use RouteCall for the final tools/call request
-	return ctx.RouteCall("POST", h.backendURL, headers, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
+	// Start with the original backend URL
+	finalURL := h.backendURL
+
+	// Apply authentication if auth info was provided
+	if authInfoCtx := ctx.GetContext("mcp_proxy_auth_info"); authInfoCtx != nil {
+		if authInfo, ok := authInfoCtx.(*ProxyAuthInfo); ok && authInfo.SecuritySchemeID != "" {
+			// Apply authentication using shared utilities
+			modifiedURL, err := h.applyProxyAuthentication(authInfo.Server, authInfo.SecuritySchemeID, authInfo.PassthroughCredential, &headers)
+			if err != nil {
+				log.Errorf("Failed to apply authentication for proxy tool call: %v", err)
+			} else {
+				// Use the modified URL if authentication was applied successfully
+				finalURL = modifiedURL
+				log.Debugf("Using modified URL for tools/call request: %s", finalURL)
+			}
+		}
+	}
+
+	// Use RouteCall for the final tools/call request with potentially modified URL
+	return ctx.RouteCall("POST", finalURL, headers, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 		if statusCode != 200 {
 			log.Errorf("Tools/call request failed with status %d: %s", statusCode, string(responseBody))
 			utils.OnMCPResponseError(ctx, fmt.Errorf("backend tools/call failed"), utils.ErrInternalError, "mcp-proxy:tools/call:backend_error")
@@ -291,7 +341,7 @@ func (h *McpProtocolHandler) executeToolsCall(ctx wrapper.HttpContext) error {
 }
 
 // sendMcpRequest sends an MCP request to the backend server using POST method
-func (h *McpProtocolHandler) sendMcpRequest(ctx wrapper.HttpContext, body []byte, callback func(int, [][2]string, []byte)) error {
+func (h *McpProtocolHandler) sendMcpRequest(ctx wrapper.HttpContext, body []byte, authInfo *ProxyAuthInfo, callback func(int, [][2]string, []byte)) error {
 	headers := [][2]string{
 		{"Content-Type", "application/json"},
 	}
@@ -299,6 +349,21 @@ func (h *McpProtocolHandler) sendMcpRequest(ctx wrapper.HttpContext, body []byte
 	// Add session ID if we have one
 	if h.sessionID != "" {
 		headers = append(headers, [2]string{"Mcp-Session-Id", h.sessionID})
+	}
+
+	// Start with the original backend URL
+	finalURL := h.backendURL
+
+	// Apply authentication if auth info was provided
+	if authInfo != nil && authInfo.SecuritySchemeID != "" {
+		modifiedURL, err := h.applyProxyAuthentication(authInfo.Server, authInfo.SecuritySchemeID, authInfo.PassthroughCredential, &headers)
+		if err != nil {
+			log.Errorf("Failed to apply authentication for MCP request: %v", err)
+		} else {
+			// Use the modified URL if authentication was applied successfully
+			finalURL = modifiedURL
+			log.Debugf("Using modified URL for MCP request: %s", finalURL)
+		}
 	}
 
 	// Determine timeout
@@ -322,8 +387,8 @@ func (h *McpProtocolHandler) sendMcpRequest(ctx wrapper.HttpContext, body []byte
 		callback(statusCode, headerSlice, responseBody)
 	}
 
-	// All MCP requests use POST method
-	return client.Post(h.backendURL, headers, body, wrappedCallback, timeout)
+	// All MCP requests use POST method with potentially modified URL
+	return client.Post(finalURL, headers, body, wrappedCallback, timeout)
 }
 
 // createInitializeRequest creates an MCP initialize request
@@ -344,7 +409,7 @@ func (h *McpProtocolHandler) createInitializeRequest() map[string]interface{} {
 }
 
 // sendInitializedNotification sends the notifications/initialized message
-func (h *McpProtocolHandler) sendInitializedNotification(ctx wrapper.HttpContext) {
+func (h *McpProtocolHandler) sendInitializedNotification(ctx wrapper.HttpContext, authInfo *ProxyAuthInfo) {
 	notification := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"method":  "notifications/initialized",
@@ -358,7 +423,7 @@ func (h *McpProtocolHandler) sendInitializedNotification(ctx wrapper.HttpContext
 	}
 
 	// Send the notification (no response expected)
-	err = h.sendMcpRequest(ctx, requestBody, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
+	err = h.sendMcpRequest(ctx, requestBody, authInfo, func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 		// Always resume at the end, regardless of success or failure
 		defer proxywasm.ResumeHttpRequest()
 
@@ -701,4 +766,57 @@ func (h *McpProtocolHandler) applyAllowToolsFilter(ctx wrapper.HttpContext, resu
 
 	// If tools array not found or invalid format, return original
 	return resultMap
+}
+
+// applyProxyAuthentication applies authentication to the proxy request headers and URL
+func (h *McpProtocolHandler) applyProxyAuthentication(server *McpProxyServer, schemeID string, passthroughCredential string, headers *[][2]string) (string, error) {
+	// Parse the backend URL to create a proper URL object for the shared function
+	parsedURL, err := url.Parse(h.backendURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse backend URL: %v", err)
+	}
+
+	// Create authentication context
+	authCtx := AuthRequestContext{
+		Method:                "POST",
+		Headers:               *headers,
+		ParsedURL:             parsedURL,
+		RequestBody:           []byte{}, // Not used for header/query auth
+		PassthroughCredential: passthroughCredential,
+	}
+
+	// Create security config for gateway-to-backend authentication
+	// The passthrough credential (if any) comes from client-to-gateway authentication
+	securityConfig := SecurityRequirement{
+		ID:          schemeID,
+		Credential:  "",                          // Will use passthrough credential or default credential from scheme
+		Passthrough: passthroughCredential != "", // Use passthrough if we have a credential
+	}
+
+	// Apply authentication using shared utilities
+	err = ApplySecurity(securityConfig, server, &authCtx)
+	if err != nil {
+		return "", err
+	}
+
+	// Update headers with authentication applied
+	*headers = authCtx.Headers
+
+	// Reconstruct URL from potentially modified ParsedURL (similar to rest_server.go logic)
+	u := authCtx.ParsedURL
+	encodedPath := u.EscapedPath()
+	var urlStr string
+	if u.Scheme != "" && u.Host != "" {
+		urlStr = u.Scheme + "://" + u.Host + encodedPath
+	} else {
+		urlStr = "/" + strings.TrimPrefix(encodedPath, "/")
+	}
+	if u.RawQuery != "" {
+		urlStr += "?" + u.RawQuery
+	}
+	if u.Fragment != "" {
+		urlStr += "#" + u.Fragment
+	}
+
+	return urlStr, nil
 }

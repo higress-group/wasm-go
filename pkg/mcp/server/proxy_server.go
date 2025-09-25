@@ -17,16 +17,17 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 
+	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
 
 // McpProxyConfig represents the configuration for MCP proxy server
+// Note: mcpServerURL, timeout, defaultDownstreamSecurity, and defaultUpstreamSecurity
+// are now direct server fields, not part of this config structure
 type McpProxyConfig struct {
-	McpServerURL    string           `json:"mcpServerURL"`
-	Timeout         int              `json:"timeout,omitempty"`
-	SecuritySchemes []SecurityScheme `json:"securitySchemes,omitempty"`
+	// This structure is kept for any additional server configuration that may be needed in the future
+	// Currently, most configuration is handled as direct server fields
 }
 
 // ToolArg represents an argument for a proxy tool
@@ -41,28 +42,29 @@ type ToolArg struct {
 
 // McpProxyToolConfig represents a tool configuration for MCP proxy
 type McpProxyToolConfig struct {
-	Name            string          `json:"name"`
-	Description     string          `json:"description"`
-	Args            []ToolArg       `json:"args"`
-	RequestTemplate RequestTemplate `json:"requestTemplate,omitempty"`
+	Name            string              `json:"name"`
+	Description     string              `json:"description"`
+	Security        SecurityRequirement `json:"security,omitempty"` // Tool-level security for MCP Client to MCP Server
+	Args            []ToolArg           `json:"args"`
+	OutputSchema    map[string]any      `json:"outputSchema,omitempty"` // Output schema for MCP Protocol Version 2025-06-18
+	RequestTemplate RequestTemplate     `json:"requestTemplate,omitempty"`
 }
 
 // RequestTemplate defines request template configuration for proxy tools
 type RequestTemplate struct {
-	Security SecurityConfig `json:"security,omitempty"`
-}
-
-// SecurityConfig represents security configuration reference
-type SecurityConfig struct {
-	ID string `json:"id"`
+	Security SecurityRequirement `json:"security,omitempty"`
 }
 
 // McpProxyServer implements Server interface for MCP-to-MCP proxy
 type McpProxyServer struct {
-	Name            string
-	base            BaseMCPServer
-	toolsConfig     map[string]McpProxyToolConfig
-	securitySchemes map[string]SecurityScheme
+	Name                      string
+	base                      BaseMCPServer
+	toolsConfig               map[string]McpProxyToolConfig
+	securitySchemes           map[string]SecurityScheme
+	defaultDownstreamSecurity SecurityRequirement // Default client-to-gateway authentication
+	defaultUpstreamSecurity   SecurityRequirement // Default gateway-to-backend authentication
+	mcpServerURL              string              // Backend MCP server URL
+	timeout                   int                 // Request timeout in milliseconds
 }
 
 // NewMcpProxyServer creates a new MCP proxy server
@@ -87,6 +89,46 @@ func (s *McpProxyServer) AddSecurityScheme(scheme SecurityScheme) {
 func (s *McpProxyServer) GetSecurityScheme(id string) (SecurityScheme, bool) {
 	scheme, ok := s.securitySchemes[id]
 	return scheme, ok
+}
+
+// SetDefaultDownstreamSecurity sets the default downstream security configuration
+func (s *McpProxyServer) SetDefaultDownstreamSecurity(security SecurityRequirement) {
+	s.defaultDownstreamSecurity = security
+}
+
+// GetDefaultDownstreamSecurity gets the default downstream security configuration
+func (s *McpProxyServer) GetDefaultDownstreamSecurity() SecurityRequirement {
+	return s.defaultDownstreamSecurity
+}
+
+// SetDefaultUpstreamSecurity sets the default upstream security configuration
+func (s *McpProxyServer) SetDefaultUpstreamSecurity(security SecurityRequirement) {
+	s.defaultUpstreamSecurity = security
+}
+
+// GetDefaultUpstreamSecurity gets the default upstream security configuration
+func (s *McpProxyServer) GetDefaultUpstreamSecurity() SecurityRequirement {
+	return s.defaultUpstreamSecurity
+}
+
+// SetMcpServerURL sets the backend MCP server URL
+func (s *McpProxyServer) SetMcpServerURL(url string) {
+	s.mcpServerURL = url
+}
+
+// GetMcpServerURL gets the backend MCP server URL
+func (s *McpProxyServer) GetMcpServerURL() string {
+	return s.mcpServerURL
+}
+
+// SetTimeout sets the request timeout in milliseconds
+func (s *McpProxyServer) SetTimeout(timeout int) {
+	s.timeout = timeout
+}
+
+// GetTimeout gets the request timeout in milliseconds
+func (s *McpProxyServer) GetTimeout() int {
+	return s.timeout
 }
 
 // AddMCPTool implements Server interface
@@ -151,105 +193,47 @@ func (s *McpProxyServer) GetToolConfig(name string) (McpProxyToolConfig, bool) {
 func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error {
 	wrapperCtx := ctx.(wrapper.HttpContext)
 
-	// Get configuration
-	var config McpProxyConfig
-	s.GetConfig(&config)
+	// Handle default downstream security for tools/list requests
+	// tools/list requests use server-level default authentication configuration
+	passthroughCredential := ""
+	downstreamSecurity := s.GetDefaultDownstreamSecurity()
+	if downstreamSecurity.ID != "" {
+		clientScheme, schemeOk := s.GetSecurityScheme(downstreamSecurity.ID)
+		if !schemeOk {
+			log.Warnf("Default downstream security scheme ID '%s' not found for tools/list request.", downstreamSecurity.ID)
+		} else {
+			// Extract and remove the credential from the incoming request
+			extractedCred, err := ExtractAndRemoveIncomingCredential(clientScheme)
+			if err != nil {
+				log.Warnf("Failed to extract/remove incoming credential for tools/list using scheme %s: %v", clientScheme.ID, err)
+			} else if extractedCred == "" {
+				log.Debugf("No incoming credential found for tools/list using scheme %s for extraction/removal.", clientScheme.ID)
+			}
 
-	// Create protocol handler
-	handler := NewMcpProtocolHandler(config.McpServerURL, config.Timeout)
+			// Only use passthrough if explicitly configured
+			if downstreamSecurity.Passthrough && extractedCred != "" {
+				passthroughCredential = extractedCred
+				log.Debugf("Passthrough credential set for tools/list request.")
+			}
+		}
+	}
+
+	// Create protocol handler using server fields
+	handler := NewMcpProtocolHandler(s.GetMcpServerURL(), s.GetTimeout())
+
+	// Prepare authentication information for gateway-to-backend communication
+	var authInfo *ProxyAuthInfo
+	upstreamSecurity := s.GetDefaultUpstreamSecurity()
+	if upstreamSecurity.ID != "" {
+		authInfo = &ProxyAuthInfo{
+			SecuritySchemeID:      upstreamSecurity.ID,
+			PassthroughCredential: passthroughCredential,
+			Server:                s,
+		}
+	}
 
 	// This will handle initialization asynchronously if needed and use ActionPause/Resume
-	return handler.ForwardToolsList(wrapperCtx, cursor)
-}
-
-// ExtractCredentials extracts credentials from the HTTP context
-func (s *McpProxyServer) ExtractCredentials(ctx *ProxyAuthContext, schemeID string) error {
-	scheme, exists := s.GetSecurityScheme(schemeID)
-	if !exists {
-		return fmt.Errorf("security scheme not found: %s", schemeID)
-	}
-
-	// Extract credentials based on scheme configuration
-	switch scheme.Type {
-	case "apiKey":
-		for _, header := range ctx.Headers {
-			if header[0] == scheme.Name {
-				ctx.PassthroughCredential = header[1]
-				return nil
-			}
-		}
-	case "http":
-		for _, header := range ctx.Headers {
-			if header[0] == "Authorization" {
-				ctx.PassthroughCredential = header[1]
-				return nil
-			}
-		}
-	}
-
-	return nil
-}
-
-// ApplyAuthentication applies authentication to the proxy request
-func (s *McpProxyServer) ApplyAuthentication(ctx *ProxyAuthContext, schemeID string) error {
-	scheme, exists := s.GetSecurityScheme(schemeID)
-	if !exists {
-		return fmt.Errorf("security scheme not found: %s", schemeID)
-	}
-
-	credential := ctx.PassthroughCredential
-	if credential == "" && scheme.DefaultCredential != "" {
-		credential = scheme.DefaultCredential
-	}
-
-	if credential == "" {
-		return fmt.Errorf("no credential available for scheme %s", schemeID)
-	}
-
-	// Apply authentication based on scheme type
-	switch scheme.Type {
-	case "apiKey":
-		if scheme.In == "header" {
-			// Add or update the header
-			found := false
-			for i, header := range ctx.Headers {
-				if header[0] == scheme.Name {
-					ctx.Headers[i] = [2]string{scheme.Name, credential}
-					found = true
-					break
-				}
-			}
-			if !found {
-				ctx.Headers = append(ctx.Headers, [2]string{scheme.Name, credential})
-			}
-		} else if scheme.In == "query" {
-			// Add to query parameters (would require URL parsing)
-			// For now, implement basic functionality
-		}
-	case "http":
-		// Apply HTTP authentication
-		found := false
-		for i, header := range ctx.Headers {
-			if header[0] == "Authorization" {
-				ctx.Headers[i] = [2]string{"Authorization", credential}
-				found = true
-				break
-			}
-		}
-		if !found {
-			ctx.Headers = append(ctx.Headers, [2]string{"Authorization", credential})
-		}
-	}
-
-	return nil
-}
-
-// ProxyAuthContext represents authentication context for proxy requests
-type ProxyAuthContext struct {
-	Headers               [][2]string
-	ParsedURL             *url.URL
-	RequestBody           []byte
-	PassthroughCredential string
+	return handler.ForwardToolsList(wrapperCtx, cursor, authInfo)
 }
 
 // McpProxyTool implements Tool interface for MCP-to-MCP proxy
@@ -286,15 +270,72 @@ func (t *McpProxyTool) Call(httpCtx HttpContext, server Server) error {
 		return fmt.Errorf("server is not a McpProxyServer")
 	}
 
-	// Get configuration
-	var config McpProxyConfig
-	proxyServer.GetConfig(&config)
+	// Handle tool-level or default downstream security: extract credential for passthrough if configured
+	// toolConfig.Security represents client-to-gateway authentication, falls back to server's defaultDownstreamSecurity
+	passthroughCredential := ""
+	var downstreamSecurity SecurityRequirement
+	if t.toolConfig.Security.ID != "" {
+		// Use tool-level security if configured
+		downstreamSecurity = t.toolConfig.Security
+		log.Debugf("Using tool-level downstream security for tool %s: %s", t.name, downstreamSecurity.ID)
+	} else {
+		// Fall back to server's default downstream security
+		downstreamSecurity = proxyServer.GetDefaultDownstreamSecurity()
+		if downstreamSecurity.ID != "" {
+			log.Debugf("Using default downstream security for tool %s: %s", t.name, downstreamSecurity.ID)
+		}
+	}
 
-	// Create protocol handler
-	handler := NewMcpProtocolHandler(config.McpServerURL, config.Timeout)
+	if downstreamSecurity.ID != "" {
+		clientScheme, schemeOk := proxyServer.GetSecurityScheme(downstreamSecurity.ID)
+		if !schemeOk {
+			log.Warnf("Downstream security scheme ID '%s' not found for tool %s.", downstreamSecurity.ID, t.name)
+		} else {
+			// Extract and remove the credential from the incoming request
+			extractedCred, err := ExtractAndRemoveIncomingCredential(clientScheme)
+			if err != nil {
+				log.Warnf("Failed to extract/remove incoming credential for tool %s using scheme %s: %v", t.name, clientScheme.ID, err)
+			} else if extractedCred == "" {
+				log.Debugf("No incoming credential found for tool %s using scheme %s for extraction/removal.", t.name, clientScheme.ID)
+			}
+
+			// Only use passthrough if explicitly configured
+			if downstreamSecurity.Passthrough && extractedCred != "" {
+				passthroughCredential = extractedCred
+				log.Debugf("Passthrough credential set for tool %s.", t.name)
+			}
+		}
+	}
+
+	// Create protocol handler using server fields
+	handler := NewMcpProtocolHandler(proxyServer.GetMcpServerURL(), proxyServer.GetTimeout())
+
+	// Prepare authentication information for gateway-to-backend communication
+	// toolConfig.RequestTemplate.Security represents gateway-to-backend authentication, falls back to server's defaultUpstreamSecurity
+	var authInfo *ProxyAuthInfo
+	var upstreamSecurity SecurityRequirement
+	if t.toolConfig.RequestTemplate.Security.ID != "" {
+		// Use tool-level upstream security if configured
+		upstreamSecurity = t.toolConfig.RequestTemplate.Security
+		log.Debugf("Using tool-level upstream security for tool %s: %s", t.name, upstreamSecurity.ID)
+	} else {
+		// Fall back to server's default upstream security
+		upstreamSecurity = proxyServer.GetDefaultUpstreamSecurity()
+		if upstreamSecurity.ID != "" {
+			log.Debugf("Using default upstream security for tool %s: %s", t.name, upstreamSecurity.ID)
+		}
+	}
+
+	if upstreamSecurity.ID != "" {
+		authInfo = &ProxyAuthInfo{
+			SecuritySchemeID:      upstreamSecurity.ID,
+			PassthroughCredential: passthroughCredential,
+			Server:                proxyServer,
+		}
+	}
 
 	// This will handle initialization asynchronously if needed and use ActionPause/Resume
-	return handler.ForwardToolsCall(ctx, t.name, t.arguments)
+	return handler.ForwardToolsCall(ctx, t.name, t.arguments, authInfo)
 }
 
 // Description implements Tool interface
@@ -336,6 +377,11 @@ func (t *McpProxyTool) InputSchema() map[string]any {
 
 	schema["required"] = required
 	return schema
+}
+
+// OutputSchema implements Tool interface (MCP Protocol Version 2025-06-18)
+func (t *McpProxyTool) OutputSchema() map[string]any {
+	return t.toolConfig.OutputSchema
 }
 
 // ValidateSecurityScheme validates a security scheme configuration

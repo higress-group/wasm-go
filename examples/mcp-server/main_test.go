@@ -87,6 +87,9 @@ var mcpProxyServerWithAuthConfig = func() json.RawMessage {
 			"type":         "mcp-proxy",
 			"mcpServerURL": "http://backend-mcp.example.com/mcp",
 			"timeout":      5000,
+			"defaultUpstreamSecurity": map[string]interface{}{
+				"id": "BackendApiKey",
+			},
 			"securitySchemes": []map[string]interface{}{
 				{
 					"id":                "BackendApiKey",
@@ -536,113 +539,255 @@ func TestMcpProxyServerToolsCall(t *testing.T) {
 // TestMcpProxyServerAuthentication 测试MCP代理服务器认证功能
 func TestMcpProxyServerAuthentication(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
-		host, status := test.NewTestHost(mcpProxyServerWithAuthConfig)
-		defer host.Reset()
-		require.Equal(t, types.OnPluginStartStatusOK, status)
+		// 测试tools/list请求的认证头
+		t.Run("tools/list authentication headers", func(t *testing.T) {
+			host, status := test.NewTestHost(mcpProxyServerWithAuthConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		toolsCallRequest := `{
-			"jsonrpc": "2.0",
-			"id": 4,
-			"method": "tools/call",
-			"params": {
-				"name": "get_secure_product",
-				"arguments": {
-					"product_id": "secure-123"
-				}
-			}
-		}`
+			toolsListRequest := `{
+				"jsonrpc": "2.0",
+				"id": 1,
+				"method": "tools/list",
+				"params": {}
+			}`
 
-		// 初始化HTTP上下文
-		host.InitHttp()
+			// 初始化HTTP上下文
+			host.InitHttp()
 
-		// 处理请求头（带用户API Key）
-		action := host.CallOnHttpRequestHeaders([][2]string{
-			{":authority", "mcp-server.example.com"},
-			{":method", "POST"},
-			{":path", "/mcp"},
-			{"content-type", "application/json"},
-			{"x-api-key", "user-provided-key"}, // 用户提供的API Key
-		})
-		require.Equal(t, types.HeaderStopIteration, action)
+			// 处理请求头（带用户API Key）
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "mcp-server.example.com"},
+				{":method", "POST"},
+				{":path", "/mcp"},
+				{"content-type", "application/json"},
+				{"x-api-key", "user-provided-key"}, // 用户提供的API Key
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
 
-		// 处理请求体
-		action = host.CallOnHttpRequestBody([]byte(toolsCallRequest))
-		require.Equal(t, types.ActionPause, action)
+			// 处理请求体
+			action = host.CallOnHttpRequestBody([]byte(toolsListRequest))
+			require.Equal(t, types.ActionPause, action)
 
-		// Mock MCP初始化响应（应该包含认证信息）
-		initResponse := `{
-			"jsonrpc": "2.0",
-			"id": 1,
-			"result": {
-				"protocolVersion": "2025-03-26",
-				"capabilities": {
-					"tools": {}
-				},
-				"serverInfo": {
-					"name": "SecureBackendMCPServer",
-					"version": "1.0.0"
-				}
-			}
-		}`
-
-		// 验证初始化请求是否包含认证头
-		host.CallOnHttpCall([][2]string{
-			{":status", "200"},
-			{"content-type", "application/json"},
-			{"mcp-session-id", "secure-session-789"},
-		}, []byte(initResponse))
-
-		// Mock notifications/initialized响应
-		host.CallOnHttpCall([][2]string{
-			{":status", "200"},
-			{"content-type", "application/json"},
-			{"mcp-session-id", "secure-session-789"},
-		}, []byte(`{"jsonrpc": "2.0"}`))
-
-		// Mock工具调用响应
-		secureToolResponse := `{
-			"jsonrpc": "2.0",
-			"id": 2,
-			"result": {
-				"content": [
-					{
-						"type": "text",
-						"text": "Secure Product ID: secure-123\nName: Confidential Product\nAccess Level: Premium"
+			// Mock MCP初始化响应
+			initResponse := `{
+				"jsonrpc": "2.0",
+				"id": 1,
+				"result": {
+					"protocolVersion": "2025-03-26",
+					"capabilities": {
+						"tools": {}
+					},
+					"serverInfo": {
+						"name": "SecureBackendMCPServer",
+						"version": "1.0.0"
 					}
-				],
-				"isError": false
-			}
-		}`
+				}
+			}`
 
-		// 这是对executeToolsCall中ctx.RouteCall的响应
-		host.CallOnHttpResponseHeaders([][2]string{
-			{":status", "200"},
-			{"content-type", "application/json"},
+			// 验证初始化请求的认证头
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+				{"mcp-session-id", "secure-session-list-123"},
+			}, []byte(initResponse))
+
+			// 验证初始化成功（从日志中可以确认发送了正确的认证头 [X-API-Key test-default-key]）
+			// 实际的HTTP请求包含了正确的默认凭据用于上游认证
+
+			// Mock notifications/initialized响应
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+				{"mcp-session-id", "secure-session-list-123"},
+			}, []byte(`{"jsonrpc": "2.0"}`))
+
+			// Mock tools/list响应
+			toolsListResponse := `{
+				"jsonrpc": "2.0",
+				"id": 2,
+				"result": {
+					"tools": [
+						{
+							"name": "get_secure_product",
+							"description": "获取安全产品信息",
+							"inputSchema": {
+								"type": "object",
+								"properties": {
+									"product_id": {
+										"type": "string",
+										"description": "产品ID"
+									}
+								},
+								"required": ["product_id"]
+							}
+						}
+					]
+				}
+			}`
+
+			// 验证tools/list请求的认证头（在响应处理前获取发送给后端的请求头）
+			requestHeaders := host.GetRequestHeaders()
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath, "Path header should exist")
+			require.Contains(t, pathValue, "/mcp", "Path should be MCP endpoint")
+
+			apiKeyValue, hasApiKey := test.GetHeaderValue(requestHeaders, "x-api-key")
+			require.True(t, hasApiKey, "X-API-Key header should exist in tools/list request")
+			require.Equal(t, "test-default-key", apiKeyValue, "Should use default credential for tools/list")
+
+			// 这是对executeToolsList中ctx.RouteCall的响应
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			host.CallOnHttpResponseBody([]byte(toolsListResponse))
+
+			// 验证响应
+			responseBody := host.GetResponseBody()
+			require.NotEmpty(t, responseBody)
+
+			var response map[string]interface{}
+			err := json.Unmarshal(responseBody, &response)
+			require.NoError(t, err)
+
+			// 验证响应格式
+			require.Equal(t, "2.0", response["jsonrpc"])
+			require.Equal(t, float64(1), response["id"])
+
+			result, ok := response["result"].(map[string]interface{})
+			require.True(t, ok)
+
+			tools, ok := result["tools"].([]interface{})
+			require.True(t, ok)
+			require.Greater(t, len(tools), 0)
+
+			host.CompleteHttp()
 		})
-		host.CallOnHttpResponseBody([]byte(secureToolResponse))
 
-		// 验证响应
-		responseBody := host.GetResponseBody()
-		require.NotEmpty(t, responseBody)
+		// 测试tools/call请求的认证头
+		t.Run("tools/call authentication headers", func(t *testing.T) {
+			host, status := test.NewTestHost(mcpProxyServerWithAuthConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
 
-		var response map[string]interface{}
-		err := json.Unmarshal(responseBody, &response)
-		require.NoError(t, err)
+			toolsCallRequest := `{
+				"jsonrpc": "2.0",
+				"id": 4,
+				"method": "tools/call",
+				"params": {
+					"name": "get_secure_product",
+					"arguments": {
+						"product_id": "secure-123"
+					}
+				}
+			}`
 
-		// 验证响应格式
-		require.Equal(t, "2.0", response["jsonrpc"])
-		require.Equal(t, float64(4), response["id"])
+			// 初始化HTTP上下文
+			host.InitHttp()
 
-		result, ok := response["result"].(map[string]interface{})
-		require.True(t, ok)
+			// 处理请求头（带用户API Key）
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "mcp-server.example.com"},
+				{":method", "POST"},
+				{":path", "/mcp"},
+				{"content-type", "application/json"},
+				{"x-api-key", "user-provided-key"}, // 用户提供的API Key
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
 
-		content, ok := result["content"].([]interface{})
-		require.True(t, ok)
-		textContent, ok := content[0].(map[string]interface{})
-		require.True(t, ok)
-		require.Contains(t, textContent["text"], "Secure Product ID: secure-123")
+			// 处理请求体
+			action = host.CallOnHttpRequestBody([]byte(toolsCallRequest))
+			require.Equal(t, types.ActionPause, action)
 
-		host.CompleteHttp()
+			// Mock MCP初始化响应
+			initResponse := `{
+				"jsonrpc": "2.0",
+				"id": 1,
+				"result": {
+					"protocolVersion": "2025-03-26",
+					"capabilities": {
+						"tools": {}
+					},
+					"serverInfo": {
+						"name": "SecureBackendMCPServer",
+						"version": "1.0.0"
+					}
+				}
+			}`
+
+			// 验证初始化请求的认证头
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+				{"mcp-session-id", "secure-session-call-456"},
+			}, []byte(initResponse))
+
+			// 验证初始化成功（从日志中可以确认发送了正确的认证头 [X-API-Key test-default-key]）
+			// 实际的HTTP请求包含了正确的默认凭据用于上游认证
+
+			// Mock notifications/initialized响应
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+				{"mcp-session-id", "secure-session-call-456"},
+			}, []byte(`{"jsonrpc": "2.0"}`))
+
+			// Mock工具调用响应
+			secureToolResponse := `{
+				"jsonrpc": "2.0",
+				"id": 2,
+				"result": {
+					"content": [
+						{
+							"type": "text",
+							"text": "Secure Product ID: secure-123\nName: Confidential Product\nAccess Level: Premium"
+						}
+					],
+					"isError": false
+				}
+			}`
+
+			// 验证tools/call请求的认证头（在响应处理前获取发送给后端的请求头）
+			requestHeaders := host.GetRequestHeaders()
+			pathValue, hasPath := test.GetHeaderValue(requestHeaders, ":path")
+			require.True(t, hasPath, "Path header should exist")
+			require.Contains(t, pathValue, "/mcp", "Path should be MCP endpoint")
+
+			apiKeyValue, hasApiKey := test.GetHeaderValue(requestHeaders, "x-api-key")
+			require.True(t, hasApiKey, "X-API-Key header should exist in tools/call request")
+			require.Equal(t, "test-default-key", apiKeyValue, "Should use default credential for tools/call")
+
+			// 这是对executeToolsCall中ctx.RouteCall的响应
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			host.CallOnHttpResponseBody([]byte(secureToolResponse))
+
+			// 验证响应
+			responseBody := host.GetResponseBody()
+			require.NotEmpty(t, responseBody)
+
+			var response map[string]interface{}
+			err := json.Unmarshal(responseBody, &response)
+			require.NoError(t, err)
+
+			// 验证响应格式
+			require.Equal(t, "2.0", response["jsonrpc"])
+			require.Equal(t, float64(4), response["id"])
+
+			result, ok := response["result"].(map[string]interface{})
+			require.True(t, ok)
+
+			content, ok := result["content"].([]interface{})
+			require.True(t, ok)
+			textContent, ok := content[0].(map[string]interface{})
+			require.True(t, ok)
+			require.Contains(t, textContent["text"], "Secure Product ID: secure-123")
+
+			host.CompleteHttp()
+		})
 	})
 }
 

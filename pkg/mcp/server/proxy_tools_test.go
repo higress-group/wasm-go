@@ -27,14 +27,9 @@ func TestToolsListForwarding(t *testing.T) {
 	// Create proxy server with tools
 	server := NewMcpProxyServer("tools-list-test")
 
-	config := McpProxyConfig{
-		McpServerURL: "http://backend.example.com/mcp",
-		Timeout:      5000,
-	}
-
-	configBytes, err := json.Marshal(config)
-	require.NoError(t, err)
-	server.SetConfig(configBytes)
+	// Set server fields directly
+	server.SetMcpServerURL("http://backend.example.com/mcp")
+	server.SetTimeout(5000)
 
 	// Add test tools
 	toolConfigs := []McpProxyToolConfig{
@@ -65,7 +60,7 @@ func TestToolsListForwarding(t *testing.T) {
 	}
 
 	for _, toolConfig := range toolConfigs {
-		err = server.AddProxyTool(toolConfig)
+		err := server.AddProxyTool(toolConfig)
 		require.NoError(t, err)
 	}
 
@@ -81,14 +76,9 @@ func TestToolsListForwarding(t *testing.T) {
 func TestToolsCallForwarding(t *testing.T) {
 	server := NewMcpProxyServer("tools-call-test")
 
-	config := McpProxyConfig{
-		McpServerURL: "http://backend.example.com/mcp",
-		Timeout:      5000,
-	}
-
-	configBytes, err := json.Marshal(config)
-	require.NoError(t, err)
-	server.SetConfig(configBytes)
+	// Set server fields directly
+	server.SetMcpServerURL("http://backend.example.com/mcp")
+	server.SetTimeout(5000)
 
 	// Add test tool
 	toolConfig := McpProxyToolConfig{
@@ -104,7 +94,7 @@ func TestToolsCallForwarding(t *testing.T) {
 		},
 	}
 
-	err = server.AddProxyTool(toolConfig)
+	err := server.AddProxyTool(toolConfig)
 	require.NoError(t, err)
 
 	// Get the tool and create instance
@@ -218,16 +208,11 @@ func TestToolsCallWithParameters(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := NewMcpProxyServer("param-test")
 
-			config := McpProxyConfig{
-				McpServerURL: "http://backend.example.com/mcp",
-				Timeout:      5000,
-			}
+			// Set server fields directly
+			server.SetMcpServerURL("http://backend.example.com/mcp")
+			server.SetTimeout(5000)
 
-			configBytes, err := json.Marshal(config)
-			require.NoError(t, err)
-			server.SetConfig(configBytes)
-
-			err = server.AddProxyTool(tt.toolConfig)
+			err := server.AddProxyTool(tt.toolConfig)
 			require.NoError(t, err)
 
 			tool, exists := server.GetMCPTools()[tt.toolConfig.Name]
@@ -253,14 +238,9 @@ func TestToolsCallWithParameters(t *testing.T) {
 func TestToolsCallWithCursor(t *testing.T) {
 	server := NewMcpProxyServer("cursor-test")
 
-	config := McpProxyConfig{
-		McpServerURL: "http://backend.example.com/mcp",
-		Timeout:      5000,
-	}
-
-	configBytes, err := json.Marshal(config)
-	require.NoError(t, err)
-	server.SetConfig(configBytes)
+	// Set server fields directly
+	server.SetMcpServerURL("http://backend.example.com/mcp")
+	server.SetTimeout(5000)
 
 	// Skip HttpContext-dependent test for now - will be tested in integration
 	// Test cursor parameter handling logic (basic validation)
@@ -273,14 +253,9 @@ func TestToolsCallWithCursor(t *testing.T) {
 func TestBackendErrorHandling(t *testing.T) {
 	server := NewMcpProxyServer("error-test")
 
-	config := McpProxyConfig{
-		McpServerURL: "http://failing-backend.example.com/mcp",
-		Timeout:      5000,
-	}
-
-	configBytes, err := json.Marshal(config)
-	require.NoError(t, err)
-	server.SetConfig(configBytes)
+	// Set server fields directly
+	server.SetMcpServerURL("http://failing-backend.example.com/mcp")
+	server.SetTimeout(5000)
 
 	toolConfig := McpProxyToolConfig{
 		Name:        "failing_tool",
@@ -295,7 +270,7 @@ func TestBackendErrorHandling(t *testing.T) {
 		},
 	}
 
-	err = server.AddProxyTool(toolConfig)
+	err := server.AddProxyTool(toolConfig)
 	require.NoError(t, err)
 
 	tool, exists := server.GetMCPTools()["failing_tool"]

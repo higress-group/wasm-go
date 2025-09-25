@@ -35,14 +35,9 @@ func TestMcpProtocolInitialization(t *testing.T) {
 	// Create proxy server
 	server := NewMcpProxyServer("test-proxy")
 
-	config := McpProxyConfig{
-		McpServerURL: "http://mock-backend.example.com/mcp",
-		Timeout:      5000,
-	}
-
-	configBytes, err := json.Marshal(config)
-	require.NoError(t, err)
-	server.SetConfig(configBytes)
+	// Set server fields directly
+	server.SetMcpServerURL("http://mock-backend.example.com/mcp")
+	server.SetTimeout(5000)
 
 	// Create proxy tool
 	toolConfig := McpProxyToolConfig{
@@ -58,7 +53,7 @@ func TestMcpProtocolInitialization(t *testing.T) {
 		},
 	}
 
-	err = server.AddProxyTool(toolConfig)
+	err := server.AddProxyTool(toolConfig)
 	require.NoError(t, err)
 
 	tool, exists := server.GetMCPTools()["test-tool"]

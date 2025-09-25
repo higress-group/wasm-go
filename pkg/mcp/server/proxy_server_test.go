@@ -15,11 +15,9 @@
 package server
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestMcpProxyServerBasicInterface tests that McpProxyServer implements the Server interface
@@ -45,30 +43,28 @@ func TestMcpProxyServerBasicInterface(t *testing.T) {
 func TestMcpProxyServerConfiguration(t *testing.T) {
 	server := NewMcpProxyServer("test-proxy")
 
-	config := McpProxyConfig{
-		McpServerURL: "http://backend.example.com/mcp",
-		Timeout:      5000,
-		SecuritySchemes: []SecurityScheme{
-			{
-				ID:   "test-auth",
-				Type: "apiKey",
-				In:   "header",
-				Name: "X-API-Key",
-			},
-		},
+	// Set server fields directly
+	server.SetMcpServerURL("http://backend.example.com/mcp")
+	server.SetTimeout(5000)
+
+	// Add security scheme
+	scheme := SecurityScheme{
+		ID:   "test-auth",
+		Type: "apiKey",
+		In:   "header",
+		Name: "X-API-Key",
 	}
+	server.AddSecurityScheme(scheme)
 
-	configBytes, err := json.Marshal(config)
-	require.NoError(t, err)
+	// Verify server fields
+	assert.Equal(t, "http://backend.example.com/mcp", server.GetMcpServerURL())
+	assert.Equal(t, 5000, server.GetTimeout())
 
-	server.SetConfig(configBytes)
-
-	var retrievedConfig McpProxyConfig
-	server.GetConfig(&retrievedConfig)
-
-	assert.Equal(t, config.McpServerURL, retrievedConfig.McpServerURL)
-	assert.Equal(t, config.Timeout, retrievedConfig.Timeout)
-	assert.Len(t, retrievedConfig.SecuritySchemes, 1)
+	// Verify security scheme
+	retrievedScheme, exists := server.GetSecurityScheme("test-auth")
+	assert.True(t, exists)
+	assert.Equal(t, "test-auth", retrievedScheme.ID)
+	assert.Equal(t, "apiKey", retrievedScheme.Type)
 }
 
 // TestMcpProxyServerAddTool tests adding proxy tools
