@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -190,10 +191,12 @@ func (h *McpProtocolHandler) executeToolsList(ctx wrapper.HttpContext) error {
 			return
 		}
 
-		// Forward the tools/list result
+		// Forward the tools/list result with allowTools filtering
 		if result, hasResult := response["result"]; hasResult {
 			if resultMap, ok := result.(map[string]interface{}); ok {
-				utils.OnMCPResponseSuccess(ctx, resultMap, "mcp-proxy:tools/list:success")
+				// Apply allowTools filtering if needed
+				filteredResult := h.applyAllowToolsFilter(ctx, resultMap)
+				utils.OnMCPResponseSuccess(ctx, filteredResult, "mcp-proxy:tools/list:success")
 			} else {
 				utils.OnMCPResponseError(ctx, fmt.Errorf("invalid tools/list result type"), utils.ErrInternalError, "mcp-proxy:tools/list:invalid_type")
 			}
@@ -547,7 +550,7 @@ func (m *McpSessionManagerImpl) CleanupExpiredSessions(maxAge time.Duration) {
 }
 
 // CreateMcpProxyMethodHandlers creates JSON-RPC method handlers for MCP proxy operations
-func CreateMcpProxyMethodHandlers(server *McpProxyServer) utils.MethodHandlers {
+func CreateMcpProxyMethodHandlers(server *McpProxyServer, allowTools map[string]struct{}) utils.MethodHandlers {
 	return utils.MethodHandlers{
 		"tools/list": func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
 			// Extract cursor parameter if present
@@ -557,14 +560,23 @@ func CreateMcpProxyMethodHandlers(server *McpProxyServer) utils.MethodHandlers {
 				cursor = &cursorStr
 			}
 
-			// This will trigger async initialization if needed and pause the request
+			// Extract allowTools information from headers and store in context for callback use
+			allowToolsHeaderStr, _ := proxywasm.GetHttpRequestHeader("x-envoy-allow-mcp-tools")
+			proxywasm.RemoveHttpRequestHeader("x-envoy-allow-mcp-tools")
+			ctx.SetContext("mcp_proxy_allow_tools_header", allowToolsHeaderStr)
+
+			// Store server reference and allowTools in context for use in callback
+			ctx.SetContext("mcp_proxy_server", server)
+			ctx.SetContext("mcp_proxy_allow_tools", allowTools)
+
+			// This will trigger async initialization if needed
 			err := server.ForwardToolsList(ctx, cursor)
 			if err != nil {
 				return err
 			}
 
-			// Since this is async, the actual response will be sent in the callback
-			// The handler should return nil to indicate that response will be sent later
+			// Signal that we need to pause and wait for async response
+			ctx.SetContext(utils.CtxNeedPause, true)
 			return nil
 		},
 		"tools/call": func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
@@ -576,17 +588,25 @@ func CreateMcpProxyMethodHandlers(server *McpProxyServer) utils.MethodHandlers {
 
 			// Extract arguments (optional)
 			arguments := make(map[string]interface{})
-			if argsResult := params.Get("arguments"); argsResult.Exists() {
+			argsResult := params.Get("arguments")
+			if argsResult.Exists() {
 				if err := json.Unmarshal([]byte(argsResult.Raw), &arguments); err != nil {
 					return fmt.Errorf("invalid arguments: %v", err)
 				}
 			}
+
+			// Set properties for monitoring and debugging (consistent with default handler)
+			proxywasm.SetProperty([]string{"mcp_server_name"}, []byte(server.Name))
+			proxywasm.SetProperty([]string{"mcp_tool_name"}, []byte(toolName))
 
 			// Create a tool instance and call it
 			toolConfig, exists := server.GetToolConfig(toolName)
 			if !exists {
 				return fmt.Errorf("tool not found: %s", toolName)
 			}
+
+			// Debug logging (consistent with default handler)
+			log.Debugf("Tool call [%s] on server [%s] with arguments[%s]", toolName, server.Name, argsResult.Raw)
 
 			tool := &McpProxyTool{
 				serverName: server.Name,
@@ -595,14 +615,90 @@ func CreateMcpProxyMethodHandlers(server *McpProxyServer) utils.MethodHandlers {
 				arguments:  arguments,
 			}
 
-			// This will trigger async initialization if needed and pause the request
+			// This will trigger async initialization if needed
 			err := tool.Call(ctx, server)
 			if err != nil {
 				return err
 			}
 
-			// Since this is async, the actual response will be sent in the callback
+			// Signal that we need to pause and wait for async response
+			ctx.SetContext(utils.CtxNeedPause, true)
 			return nil
 		},
 	}
+}
+
+// applyAllowToolsFilter applies allowTools filtering to the tools/list response
+func (h *McpProtocolHandler) applyAllowToolsFilter(ctx wrapper.HttpContext, resultMap map[string]interface{}) map[string]interface{} {
+	// Get allowTools configuration from context
+	var allowTools map[string]struct{}
+	if allowToolsCtx := ctx.GetContext("mcp_proxy_allow_tools"); allowToolsCtx != nil {
+		if allowToolsMap, ok := allowToolsCtx.(map[string]struct{}); ok {
+			allowTools = allowToolsMap
+		}
+	}
+	if allowTools == nil {
+		allowTools = make(map[string]struct{})
+	}
+
+	// Get allowTools from request header (stored earlier in context)
+	allowToolsFromHeader := make(map[string]struct{})
+	if allowToolsHeaderStr := ctx.GetContext("mcp_proxy_allow_tools_header"); allowToolsHeaderStr != nil {
+		headerStr := allowToolsHeaderStr.(string)
+		for tool := range strings.SplitSeq(headerStr, ",") {
+			trimmedTool := strings.TrimSpace(tool)
+			if trimmedTool == "" {
+				continue
+			}
+			allowToolsFromHeader[trimmedTool] = struct{}{}
+		}
+	}
+
+	// If no filtering is needed, return original result
+	if len(allowTools) == 0 && len(allowToolsFromHeader) == 0 {
+		return resultMap
+	}
+
+	// Apply filtering to tools array
+	if tools, hasTools := resultMap["tools"]; hasTools {
+		if toolsArray, ok := tools.([]interface{}); ok {
+			filteredTools := make([]interface{}, 0)
+
+			for _, tool := range toolsArray {
+				if toolMap, ok := tool.(map[string]interface{}); ok {
+					if name, hasName := toolMap["name"]; hasName {
+						if toolName, ok := name.(string); ok {
+							// Check against configuration allowTools
+							if len(allowTools) > 0 {
+								if _, allow := allowTools[toolName]; !allow {
+									continue
+								}
+							}
+
+							// Check against header allowTools
+							if len(allowToolsFromHeader) > 0 {
+								if _, allow := allowToolsFromHeader[toolName]; !allow {
+									continue
+								}
+							}
+
+							// Tool is allowed, add to filtered list
+							filteredTools = append(filteredTools, tool)
+						}
+					}
+				}
+			}
+
+			// Create new result with filtered tools
+			filteredResult := make(map[string]interface{})
+			for k, v := range resultMap {
+				filteredResult[k] = v
+			}
+			filteredResult["tools"] = filteredTools
+			return filteredResult
+		}
+	}
+
+	// If tools array not found or invalid format, return original
+	return resultMap
 }

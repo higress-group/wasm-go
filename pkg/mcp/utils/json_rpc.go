@@ -32,6 +32,7 @@ import (
 
 const (
 	CtxJsonRpcID = "jsonRpcID"
+	CtxNeedPause = "needPause" // Context key to signal if the handler needs to pause
 	JError       = "error"
 	JCode        = "code"
 	JMessage     = "message"
@@ -164,11 +165,21 @@ func HandleJsonRpcMethod(ctx wrapper.HttpContext, body []byte, handles MethodHan
 	if method != "" {
 		if handle, ok := handles[method]; ok {
 			log.Debugf("json rpc call method[%s] with params[%s]", method, params.Raw)
+
+			// Clear pause flag before calling handler
+			ctx.SetContext(CtxNeedPause, false)
+
 			err := handle(ctx, id, params)
 			if err != nil {
 				OnJsonRpcResponseError(ctx, err, ErrInvalidRequest)
 				return types.ActionContinue
 			}
+
+			// Check if the handler set the pause flag
+			if needPause := ctx.GetContext(CtxNeedPause); needPause != nil && needPause.(bool) {
+				return types.ActionPause
+			}
+
 			return types.ActionContinue
 		}
 		OnJsonRpcResponseError(ctx, fmt.Errorf("method not found:%s", method), ErrMethodNotFound)

@@ -38,17 +38,52 @@ examples/mcp-server/
 
 ## 运行测试
 
+使用`RunTest`同时运行Go模式和WASM模式测试：
+
 ```bash
 cd examples/mcp-server
+
+# 运行所有测试（需要TinyGo）
+make test
+
+# 或者手动运行
 go test -v .
 ```
 
-## 编译
+### 单独运行测试模式
 
 ```bash
-cd examples/mcp-server
+# 只运行Go模式测试
+make test-go
+
+# 只运行WASM模式测试
+make test-wasm
+
+# 运行性能基准测试
+make bench
+```
+
+## 构建
+
+### 构建WASM插件
+
+```bash
+# 使用Makefile（推荐）
+make build
+
+# 或者直接使用tinygo
+tinygo build -o main.wasm -scheduler=none -target=wasi -no-debug main.go
+```
+
+### 构建Go可执行文件
+
+```bash
 go build -o mcp-server .
 ```
+
+## 前置条件
+
+- Go 1.21+
 
 ## 配置示例
 

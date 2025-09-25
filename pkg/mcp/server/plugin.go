@@ -350,92 +350,108 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		return nil
 	}
 
-	config.methodHandlers["tools/list"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
-		var listedTools []map[string]any
-		// GetMCPTools() will return appropriately formatted tools for both single and composed servers
-		allTools := config.server.GetMCPTools() // For composed, keys are "serverName/toolName"
-		allowToolsHeaderStr, _ := proxywasm.GetHttpRequestHeader("x-envoy-allow-mcp-tools")
-		proxywasm.RemoveHttpRequestHeader("x-envoy-allow-mcp-tools")
-		allowToolsFromHeader := make(map[string]struct{})
-		for tool := range strings.SplitSeq(allowToolsHeaderStr, ",") {
-			trimmedTool := strings.TrimSpace(tool)
-			if trimmedTool == "" {
-				continue
-			}
-			allowToolsFromHeader[trimmedTool] = struct{}{}
+	// Override tools/list and tools/call handlers for MCP proxy servers first
+	if config.server != nil {
+		if proxyServer, ok := config.server.(*McpProxyServer); ok {
+			// Use MCP proxy specific handlers that support ActionPause
+			proxyHandlers := CreateMcpProxyMethodHandlers(proxyServer, allowTools)
+			config.methodHandlers["tools/list"] = proxyHandlers["tools/list"]
+			config.methodHandlers["tools/call"] = proxyHandlers["tools/call"]
 		}
-		for toolFullName, tool := range allTools {
-			// For composed server, toolFullName is "originalServerName/originalToolName"
-			// For single server, toolFullName is "originalToolName"
-			// The allowTools map should use the same format as toolFullName
-			if len(allowTools) != 0 {
-				if _, allow := allowTools[toolFullName]; !allow {
-					continue
-				}
-			}
-			if len(allowToolsFromHeader) != 0 {
-				if _, allow := allowToolsFromHeader[toolFullName]; !allow {
-					continue
-				}
-			}
-			toolDef := map[string]any{
-				"name":        toolFullName,
-				"description": tool.Description(),
-				"inputSchema": tool.InputSchema(),
-			}
-			// Add outputSchema if tool implements ToolWithOutputSchema (MCP Protocol Version 2025-06-18)
-			if toolWithSchema, ok := tool.(ToolWithOutputSchema); ok {
-				if outputSchema := toolWithSchema.OutputSchema(); outputSchema != nil && len(outputSchema) > 0 {
-					toolDef["outputSchema"] = outputSchema
-				}
-			}
-			listedTools = append(listedTools, toolDef)
-		}
-		utils.OnMCPResponseSuccess(ctx, map[string]any{
-			"tools": listedTools,
-		}, fmt.Sprintf("mcp:%s:tools/list", currentServerNameForHandlers))
-		return nil
 	}
 
-	config.methodHandlers["tools/call"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
-		if config.isComposed {
-			// This endpoint is for a composed server (toolSet).
-			// Actual tool calls should be routed by mcp-router to individual servers.
-			// If a tools/call request reaches here, it's a misconfiguration or unexpected.
-			errMsg := fmt.Sprintf("tools/call is not supported on a composed toolSet endpoint ('%s'). It should be routed by mcp-router to the target server.", currentServerNameForHandlers)
-			log.Errorf(errMsg)
-			utils.OnMCPResponseError(ctx, errors.New(errMsg), utils.ErrMethodNotFound, fmt.Sprintf("mcp:%s:tools/call:not_supported_on_toolset", currentServerNameForHandlers))
+	// Default tools/list handler for non-proxy servers
+	if config.methodHandlers["tools/list"] == nil {
+		config.methodHandlers["tools/list"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
+			var listedTools []map[string]any
+			// GetMCPTools() will return appropriately formatted tools for both single and composed servers
+			allTools := config.server.GetMCPTools() // For composed, keys are "serverName/toolName"
+			allowToolsHeaderStr, _ := proxywasm.GetHttpRequestHeader("x-envoy-allow-mcp-tools")
+			proxywasm.RemoveHttpRequestHeader("x-envoy-allow-mcp-tools")
+			allowToolsFromHeader := make(map[string]struct{})
+			for tool := range strings.SplitSeq(allowToolsHeaderStr, ",") {
+				trimmedTool := strings.TrimSpace(tool)
+				if trimmedTool == "" {
+					continue
+				}
+				allowToolsFromHeader[trimmedTool] = struct{}{}
+			}
+			for toolFullName, tool := range allTools {
+				// For composed server, toolFullName is "originalServerName/originalToolName"
+				// For single server, toolFullName is "originalToolName"
+				// The allowTools map should use the same format as toolFullName
+				if len(allowTools) != 0 {
+					if _, allow := allowTools[toolFullName]; !allow {
+						continue
+					}
+				}
+				if len(allowToolsFromHeader) != 0 {
+					if _, allow := allowToolsFromHeader[toolFullName]; !allow {
+						continue
+					}
+				}
+				toolDef := map[string]any{
+					"name":        toolFullName,
+					"description": tool.Description(),
+					"inputSchema": tool.InputSchema(),
+				}
+				// Add outputSchema if tool implements ToolWithOutputSchema (MCP Protocol Version 2025-06-18)
+				if toolWithSchema, ok := tool.(ToolWithOutputSchema); ok {
+					if outputSchema := toolWithSchema.OutputSchema(); len(outputSchema) > 0 {
+						toolDef["outputSchema"] = outputSchema
+					}
+				}
+				listedTools = append(listedTools, toolDef)
+			}
+			utils.OnMCPResponseSuccess(ctx, map[string]any{
+				"tools": listedTools,
+			}, fmt.Sprintf("mcp:%s:tools/list", currentServerNameForHandlers))
 			return nil
 		}
+	}
 
-		// Logic for single (non-composed) server
-		toolName := params.Get("name").String() // For single server, this is the direct tool name
-		args := params.Get("arguments")
-
-		if len(allowTools) != 0 {
-			if _, allow := allowTools[toolName]; !allow {
-				utils.OnMCPResponseError(ctx, fmt.Errorf("Tool not allowed: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:tool_not_allowed", currentServerNameForHandlers))
+	// Default tools/call handler for non-proxy servers
+	if config.methodHandlers["tools/call"] == nil {
+		config.methodHandlers["tools/call"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
+			if config.isComposed {
+				// This endpoint is for a composed server (toolSet).
+				// Actual tool calls should be routed by mcp-router to individual servers.
+				// If a tools/call request reaches here, it's a misconfiguration or unexpected.
+				errMsg := fmt.Sprintf("tools/call is not supported on a composed toolSet endpoint ('%s'). It should be routed by mcp-router to the target server.", currentServerNameForHandlers)
+				log.Errorf(errMsg)
+				utils.OnMCPResponseError(ctx, errors.New(errMsg), utils.ErrMethodNotFound, fmt.Sprintf("mcp:%s:tools/call:not_supported_on_toolset", currentServerNameForHandlers))
 				return nil
 			}
-		}
 
-		proxywasm.SetProperty([]string{"mcp_server_name"}, []byte(currentServerNameForHandlers))
-		proxywasm.SetProperty([]string{"mcp_tool_name"}, []byte(toolName))
+			// Logic for single (non-composed) server
+			toolName := params.Get("name").String() // For single server, this is the direct tool name
+			args := params.Get("arguments")
 
-		toolToCall, ok := config.server.GetMCPTools()[toolName]
-		if !ok {
-			utils.OnMCPResponseError(ctx, fmt.Errorf("Unknown tool: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:invalid_tool_name", currentServerNameForHandlers))
+			if len(allowTools) != 0 {
+				if _, allow := allowTools[toolName]; !allow {
+					utils.OnMCPResponseError(ctx, fmt.Errorf("Tool not allowed: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:tool_not_allowed", currentServerNameForHandlers))
+					return nil
+				}
+			}
+
+			proxywasm.SetProperty([]string{"mcp_server_name"}, []byte(currentServerNameForHandlers))
+			proxywasm.SetProperty([]string{"mcp_tool_name"}, []byte(toolName))
+
+			toolToCall, ok := config.server.GetMCPTools()[toolName]
+			if !ok {
+				utils.OnMCPResponseError(ctx, fmt.Errorf("Unknown tool: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:invalid_tool_name", currentServerNameForHandlers))
+				return nil
+			}
+
+			log.Debugf("Tool call [%s] on server [%s] with arguments[%s]", toolName, currentServerNameForHandlers, args.Raw)
+			toolInstance := toolToCall.Create([]byte(args.Raw))
+			err := toolInstance.Call(ctx, config.server) // Pass the single server instance
+			if err != nil {
+				utils.OnMCPToolCallError(ctx, err)
+				return nil
+			}
 			return nil
 		}
-
-		log.Debugf("Tool call [%s] on server [%s] with arguments[%s]", toolName, currentServerNameForHandlers, args.Raw)
-		toolInstance := toolToCall.Create([]byte(args.Raw))
-		err := toolInstance.Call(ctx, config.server) // Pass the single server instance
-		if err != nil {
-			utils.OnMCPToolCallError(ctx, err)
-			return nil
-		}
-		return nil
 	}
 
 	return nil
