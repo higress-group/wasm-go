@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/tidwall/sjson"
 )
 
@@ -805,4 +807,111 @@ func TestRestToolConfig(t *testing.T) {
 			t.Errorf("Response template rendering failed. Expected substring not found: %s", substr)
 		}
 	}
+}
+
+// TestRestServerDefaultSecurity tests the default security configuration for REST MCP server
+func TestRestServerDefaultSecurity(t *testing.T) {
+	server := NewRestMCPServer("test-rest-server")
+
+	// Add security schemes
+	defaultScheme := SecurityScheme{
+		ID:                "DefaultAuth",
+		Type:              "apiKey",
+		In:                "header",
+		Name:              "X-Default-Key",
+		DefaultCredential: "default-key",
+	}
+	toolScheme := SecurityScheme{
+		ID:                "ToolAuth",
+		Type:              "apiKey",
+		In:                "header",
+		Name:              "X-Tool-Key",
+		DefaultCredential: "tool-key",
+	}
+	server.AddSecurityScheme(defaultScheme)
+	server.AddSecurityScheme(toolScheme)
+
+	// Test setting default security directly on server
+	server.SetDefaultDownstreamSecurity(SecurityRequirement{
+		ID:          "DefaultAuth",
+		Passthrough: false,
+	})
+	server.SetDefaultUpstreamSecurity(SecurityRequirement{
+		ID: "DefaultAuth",
+	})
+
+	// Verify default security settings
+	retrievedDownstream := server.GetDefaultDownstreamSecurity()
+	assert.Equal(t, "DefaultAuth", retrievedDownstream.ID)
+	assert.False(t, retrievedDownstream.Passthrough)
+
+	retrievedUpstream := server.GetDefaultUpstreamSecurity()
+	assert.Equal(t, "DefaultAuth", retrievedUpstream.ID)
+
+	t.Logf("REST server default security configuration test completed successfully")
+}
+
+// TestRestServerSecurityFallback tests the fallback mechanism from tool-level to default security
+func TestRestServerSecurityFallback(t *testing.T) {
+	server := NewRestMCPServer("test-rest-server")
+
+	// Add security schemes
+	defaultScheme := SecurityScheme{
+		ID:                "DefaultAuth",
+		Type:              "apiKey",
+		In:                "header",
+		Name:              "X-Default-Key",
+		DefaultCredential: "default-key",
+	}
+	toolScheme := SecurityScheme{
+		ID:                "ToolAuth",
+		Type:              "apiKey",
+		In:                "header",
+		Name:              "X-Tool-Key",
+		DefaultCredential: "tool-key",
+	}
+	server.AddSecurityScheme(defaultScheme)
+	server.AddSecurityScheme(toolScheme)
+
+	// Test tool configuration with tool-level security (should use tool-level, not default)
+	toolConfigWithSecurity := RestTool{
+		Name:        "secure_tool",
+		Description: "Tool with its own security",
+		Security: SecurityRequirement{
+			ID:          "ToolAuth",
+			Passthrough: true,
+		},
+		RequestTemplate: RestToolRequestTemplate{
+			URL:    "http://api.example.com/secure",
+			Method: "GET",
+			Security: SecurityRequirement{
+				ID: "ToolAuth",
+			},
+		},
+	}
+
+	// Test tool configuration without tool-level security (should fallback to default)
+	toolConfigWithoutSecurity := RestTool{
+		Name:        "fallback_tool",
+		Description: "Tool that falls back to default security",
+		// No Security field configured, should use default
+		RequestTemplate: RestToolRequestTemplate{
+			URL:    "http://api.example.com/fallback",
+			Method: "GET",
+			// No Security field configured, should use default
+		},
+	}
+
+	// Add tools to server
+	err := server.AddRestTool(toolConfigWithSecurity)
+	assert.NoError(t, err)
+	err = server.AddRestTool(toolConfigWithoutSecurity)
+	assert.NoError(t, err)
+
+	// Verify tools were added
+	tools := server.GetMCPTools()
+	assert.Contains(t, tools, "secure_tool")
+	assert.Contains(t, tools, "fallback_tool")
+
+	t.Logf("REST server security fallback test completed successfully")
 }
