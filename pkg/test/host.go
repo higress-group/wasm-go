@@ -32,6 +32,10 @@ type TestHost interface {
 	CallOnHttpCall(headers [][2]string, body []byte)
 	// CallOnRedisCall call the proxy_on_redis_call_response method in the wasm plugin.
 	CallOnRedisCall(status int32, response []byte)
+	// GetHttpCalloutAttributes get the callout attributes.
+	GetHttpCalloutAttributes() []proxytest.HttpCalloutAttribute
+	// GetRedisCalloutAttributes get the redis callout attributes.
+	GetRedisCalloutAttributes() []proxytest.RedisCalloutAttribute
 	// InitHttp init the http context which executes types.PluginContext.NewHttpContext in the plugin.
 	InitHttp()
 	// CompleteHttpRequest complete the http context which executes types.HttpContext.OnHttpStreamDone in the plugin.
@@ -204,6 +208,16 @@ func (h *testHost) CallOnRedisCall(status int32, response []byte) {
 	attrs := h.HostEmulator.GetRedisCalloutAttributesFromContext(h.currentContextID)
 	calloutID := attrs[0].CalloutID
 	h.HostEmulator.CallOnRedisCallResponse(calloutID, status, response)
+}
+
+// GetHttpCalloutAttributes get the callout attributes.
+func (h *testHost) GetHttpCalloutAttributes() []proxytest.HttpCalloutAttribute {
+	return h.HostEmulator.GetCalloutAttributesFromContext(h.currentContextID)
+}
+
+// GetRedisCalloutAttributes get the redis callout attributes.
+func (h *testHost) GetRedisCalloutAttributes() []proxytest.RedisCalloutAttribute {
+	return h.HostEmulator.GetRedisCalloutAttributesFromContext(h.currentContextID)
 }
 
 // SetRouteName set the property route_name with the route name.

@@ -101,6 +101,8 @@ defer host.Reset()
 ##### External Call
 - `CallOnHttpCall(headers [][2]string, body []byte)` - Simulate HTTP call response
 - `CallOnRedisCall(status int32, response []byte)` - Simulate Redis call response
+- `GetHttpCalloutAttributes() []proxytest.HttpCalloutAttribute` - Get HTTP callout attributes (outbound http calls made by the plugin)
+- `GetRedisCalloutAttributes() []proxytest.RedisCalloutAttribute` - Get Redis callout attributes (outbound redis calls made by the plugin)
 
 ##### Plugin Configuration
 - `GetMatchConfig() (any, error)` - Get match configuration
@@ -187,16 +189,22 @@ func TestMyPlugin(t *testing.T) {
         action := host.CallOnHttpRequestHeaders(headers)
         require.Equal(t, types.ActionPause, action)
 
-        // 4. Simulate external call responses (if needed)
+        // 4. Verify outbound calls made by the plugin (if any)
+        // httpCallouts := host.GetHttpCalloutAttributes()
+        // require.Len(t, httpCallouts, 1)
+        // assert.Equal(t, "httpbin.org", httpCallouts[0].Upstream)
+        // assert.Equal(t, "GET", test.GetHeaderValue(httpCallouts[0].Headers, ":method"))
+
+        // 5. Simulate external call responses (if needed)
 
         // host.CallOnRedisCall(0, test.CreateRedisRespString("OK"))
 
         // host.CallOnHttpCall([][2]string{{":status", "200"}}, []byte(`{"result": "success"}`))
 
-        // 5. Complete request
+        // 6. Complete request
         host.CompleteHttp()
 
-        // 6. Verify results
+        // 7. Verify results
         localResponse := host.GetLocalResponse()
         require.NotNil(t, localResponse)
         assert.Equal(t, uint32(200), localResponse.StatusCode)
@@ -306,7 +314,14 @@ func TestParseConfig(t *testing.T) {
 - Test boundary conditions and error cases
 - Simulate real network environments
 
-### 5. Wasm File Path Management
+### 5. Outbound Call Testing
+- Use `GetHttpCalloutAttributes()` and `GetRedisCalloutAttributes()` to verify external service calls
+- **Test order**: Verify outbound calls before simulating external responses
+- Check that the plugin makes the expected outbound calls with correct parameters
+- Verify upstream service names, headers, and request bodies
+- Test both successful and failed external call scenarios
+
+### 6. Wasm File Path Management
 - Use environment variable `WASM_FILE_PATH` for consistent configuration across different environments
 - Leverage intelligent path detection for common project structures
 - Use `RunTestWithPath()` or `RunWasmTestWithPath()` for project-specific wasm file locations
