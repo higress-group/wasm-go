@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"reflect"
 	"slices"
 	"strings"
@@ -38,6 +39,89 @@ const (
 
 // SupportedMCPVersions contains all supported MCP protocol versions
 var SupportedMCPVersions = []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+
+// validateURL validates that the given string is a valid URL
+func validateURL(urlStr string) error {
+	if urlStr == "" {
+		return errors.New("url cannot be empty")
+	}
+
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return fmt.Errorf("invalid URL format: %v", err)
+	}
+
+	if parsedURL.Scheme == "" {
+		return errors.New("url must include a scheme (http or https)")
+	}
+
+	if parsedURL.Host == "" {
+		return errors.New("url must include a host")
+	}
+
+	// Only allow http and https schemes for security
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("unsupported URL scheme '%s', only http and https are allowed", parsedURL.Scheme)
+	}
+
+	return nil
+}
+
+// setupMcpProxyServer creates and configures an MCP proxy server
+func setupMcpProxyServer(serverName string, serverJson gjson.Result, serverConfigJsonForInstance string) (*McpProxyServer, error) {
+	proxyServer := NewMcpProxyServer(serverName)
+	proxyServer.SetConfig([]byte(serverConfigJsonForInstance))
+
+	// Parse and validate mcpServerURL (required for mcp-proxy)
+	mcpServerURL := serverJson.Get("mcpServerURL").String()
+	if mcpServerURL == "" {
+		return nil, errors.New("mcpServerURL is required for mcp-proxy server type")
+	}
+	if err := validateURL(mcpServerURL); err != nil {
+		return nil, fmt.Errorf("invalid mcpServerURL: %v", err)
+	}
+	proxyServer.SetMcpServerURL(mcpServerURL)
+
+	// Parse timeout (optional)
+	timeout := serverJson.Get("timeout").Int()
+	if timeout > 0 {
+		proxyServer.SetTimeout(int(timeout))
+	}
+
+	// Parse security schemes
+	securitySchemesJson := serverJson.Get("securitySchemes")
+	if securitySchemesJson.Exists() {
+		for _, schemeJson := range securitySchemesJson.Array() {
+			var scheme SecurityScheme
+			if err := json.Unmarshal([]byte(schemeJson.Raw), &scheme); err != nil {
+				return nil, fmt.Errorf("failed to parse security scheme config: %v", err)
+			}
+			proxyServer.AddSecurityScheme(scheme)
+		}
+	}
+
+	// Parse default downstream security
+	defaultDownstreamSecurityJson := serverJson.Get("defaultDownstreamSecurity")
+	if defaultDownstreamSecurityJson.Exists() {
+		var defaultDownstreamSecurity SecurityRequirement
+		if err := json.Unmarshal([]byte(defaultDownstreamSecurityJson.Raw), &defaultDownstreamSecurity); err != nil {
+			return nil, fmt.Errorf("failed to parse defaultDownstreamSecurity config: %v", err)
+		}
+		proxyServer.SetDefaultDownstreamSecurity(defaultDownstreamSecurity)
+	}
+
+	// Parse default upstream security
+	defaultUpstreamSecurityJson := serverJson.Get("defaultUpstreamSecurity")
+	if defaultUpstreamSecurityJson.Exists() {
+		var defaultUpstreamSecurity SecurityRequirement
+		if err := json.Unmarshal([]byte(defaultUpstreamSecurityJson.Raw), &defaultUpstreamSecurity); err != nil {
+			return nil, fmt.Errorf("failed to parse defaultUpstreamSecurity config: %v", err)
+		}
+		proxyServer.SetDefaultUpstreamSecurity(defaultUpstreamSecurity)
+	}
+
+	return proxyServer, nil
+}
 
 type HttpContext wrapper.HttpContext
 
@@ -214,58 +298,21 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 
 		// Check server type to determine which type of server to create
 		serverType := serverJson.Get("type").String()
+		if serverType == "" {
+			serverType = "rest" // Default to REST server type
+		}
 
-		// Original logic for single server
 		toolsJson := configJson.Get("tools") // These are REST tools for this server instance or MCP proxy tools
-		if toolsJson.Exists() && len(toolsJson.Array()) > 0 {
-			if serverType == "mcp-proxy" {
-				// Create MCP-proxy server
-				proxyServer := NewMcpProxyServer(config.serverName)
-				proxyServer.SetConfig([]byte(serverConfigJsonForInstance))
 
-				// Parse mcpServerURL
-				mcpServerURL := serverJson.Get("mcpServerURL").String()
-				if mcpServerURL != "" {
-					proxyServer.SetMcpServerURL(mcpServerURL)
-				}
+		if serverType == "mcp-proxy" {
+			// Create MCP proxy server
+			proxyServer, err := setupMcpProxyServer(config.serverName, serverJson, serverConfigJsonForInstance)
+			if err != nil {
+				return err
+			}
 
-				// Parse timeout
-				timeout := serverJson.Get("timeout").Int()
-				if timeout > 0 {
-					proxyServer.SetTimeout(int(timeout))
-				}
-
-				securitySchemesJson := serverJson.Get("securitySchemes")
-				if securitySchemesJson.Exists() {
-					for _, schemeJson := range securitySchemesJson.Array() {
-						var scheme SecurityScheme
-						if err := json.Unmarshal([]byte(schemeJson.Raw), &scheme); err != nil {
-							return fmt.Errorf("failed to parse security scheme config: %v", err)
-						}
-						proxyServer.AddSecurityScheme(scheme)
-					}
-				}
-
-				// Parse default downstream security
-				defaultDownstreamSecurityJson := serverJson.Get("defaultDownstreamSecurity")
-				if defaultDownstreamSecurityJson.Exists() {
-					var defaultDownstreamSecurity SecurityRequirement
-					if err := json.Unmarshal([]byte(defaultDownstreamSecurityJson.Raw), &defaultDownstreamSecurity); err != nil {
-						return fmt.Errorf("failed to parse defaultDownstreamSecurity config: %v", err)
-					}
-					proxyServer.SetDefaultDownstreamSecurity(defaultDownstreamSecurity)
-				}
-
-				// Parse default upstream security
-				defaultUpstreamSecurityJson := serverJson.Get("defaultUpstreamSecurity")
-				if defaultUpstreamSecurityJson.Exists() {
-					var defaultUpstreamSecurity SecurityRequirement
-					if err := json.Unmarshal([]byte(defaultUpstreamSecurityJson.Raw), &defaultUpstreamSecurity); err != nil {
-						return fmt.Errorf("failed to parse defaultUpstreamSecurity config: %v", err)
-					}
-					proxyServer.SetDefaultUpstreamSecurity(defaultUpstreamSecurity)
-				}
-
+			// Handle tools configuration (optional for MCP proxy)
+			if toolsJson.Exists() && len(toolsJson.Array()) > 0 {
 				for _, toolJson := range toolsJson.Array() {
 					var proxyTool McpProxyToolConfig
 					if err := json.Unmarshal([]byte(toolJson.Raw), &proxyTool); err != nil {
@@ -278,57 +325,59 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 					// Register tool to registry
 					opts.ToolRegistry.RegisterTool(config.serverName, proxyTool.Name, proxyServer.GetMCPTools()[proxyTool.Name])
 				}
-				config.server = proxyServer
-			} else {
-				// Create REST-to-MCP server (default behavior)
-				restServer := NewRestMCPServer(config.serverName)         // Pass the server name
-				restServer.SetConfig([]byte(serverConfigJsonForInstance)) // Pass the server's specific config
-
-				securitySchemesJson := serverJson.Get("securitySchemes")
-				if securitySchemesJson.Exists() {
-					for _, schemeJson := range securitySchemesJson.Array() {
-						var scheme SecurityScheme
-						if err := json.Unmarshal([]byte(schemeJson.Raw), &scheme); err != nil {
-							return fmt.Errorf("failed to parse security scheme config: %v", err)
-						}
-						restServer.AddSecurityScheme(scheme)
-					}
-				}
-
-				// Parse default downstream security
-				defaultDownstreamSecurityJson := serverJson.Get("defaultDownstreamSecurity")
-				if defaultDownstreamSecurityJson.Exists() {
-					var defaultDownstreamSecurity SecurityRequirement
-					if err := json.Unmarshal([]byte(defaultDownstreamSecurityJson.Raw), &defaultDownstreamSecurity); err != nil {
-						return fmt.Errorf("failed to parse defaultDownstreamSecurity config: %v", err)
-					}
-					restServer.SetDefaultDownstreamSecurity(defaultDownstreamSecurity)
-				}
-
-				// Parse default upstream security
-				defaultUpstreamSecurityJson := serverJson.Get("defaultUpstreamSecurity")
-				if defaultUpstreamSecurityJson.Exists() {
-					var defaultUpstreamSecurity SecurityRequirement
-					if err := json.Unmarshal([]byte(defaultUpstreamSecurityJson.Raw), &defaultUpstreamSecurity); err != nil {
-						return fmt.Errorf("failed to parse defaultUpstreamSecurity config: %v", err)
-					}
-					restServer.SetDefaultUpstreamSecurity(defaultUpstreamSecurity)
-				}
-
-				for _, toolJson := range toolsJson.Array() {
-					var restTool RestTool
-					if err := json.Unmarshal([]byte(toolJson.Raw), &restTool); err != nil {
-						return fmt.Errorf("failed to parse tool config: %v", err)
-					}
-
-					if err := restServer.AddRestTool(restTool); err != nil {
-						return fmt.Errorf("failed to add tool %s: %v", restTool.Name, err)
-					}
-					// Register tool to registry
-					opts.ToolRegistry.RegisterTool(config.serverName, restTool.Name, restServer.GetMCPTools()[restTool.Name])
-				}
-				config.server = restServer
 			}
+			// Set the proxy server regardless of whether tools are configured
+			config.server = proxyServer
+		} else if toolsJson.Exists() && len(toolsJson.Array()) > 0 {
+			// Handle REST-to-MCP server (requires tools configuration)
+			// Create REST-to-MCP server (default behavior)
+			restServer := NewRestMCPServer(config.serverName)         // Pass the server name
+			restServer.SetConfig([]byte(serverConfigJsonForInstance)) // Pass the server's specific config
+
+			securitySchemesJson := serverJson.Get("securitySchemes")
+			if securitySchemesJson.Exists() {
+				for _, schemeJson := range securitySchemesJson.Array() {
+					var scheme SecurityScheme
+					if err := json.Unmarshal([]byte(schemeJson.Raw), &scheme); err != nil {
+						return fmt.Errorf("failed to parse security scheme config: %v", err)
+					}
+					restServer.AddSecurityScheme(scheme)
+				}
+			}
+
+			// Parse default downstream security
+			defaultDownstreamSecurityJson := serverJson.Get("defaultDownstreamSecurity")
+			if defaultDownstreamSecurityJson.Exists() {
+				var defaultDownstreamSecurity SecurityRequirement
+				if err := json.Unmarshal([]byte(defaultDownstreamSecurityJson.Raw), &defaultDownstreamSecurity); err != nil {
+					return fmt.Errorf("failed to parse defaultDownstreamSecurity config: %v", err)
+				}
+				restServer.SetDefaultDownstreamSecurity(defaultDownstreamSecurity)
+			}
+
+			// Parse default upstream security
+			defaultUpstreamSecurityJson := serverJson.Get("defaultUpstreamSecurity")
+			if defaultUpstreamSecurityJson.Exists() {
+				var defaultUpstreamSecurity SecurityRequirement
+				if err := json.Unmarshal([]byte(defaultUpstreamSecurityJson.Raw), &defaultUpstreamSecurity); err != nil {
+					return fmt.Errorf("failed to parse defaultUpstreamSecurity config: %v", err)
+				}
+				restServer.SetDefaultUpstreamSecurity(defaultUpstreamSecurity)
+			}
+
+			for _, toolJson := range toolsJson.Array() {
+				var restTool RestTool
+				if err := json.Unmarshal([]byte(toolJson.Raw), &restTool); err != nil {
+					return fmt.Errorf("failed to parse tool config: %v", err)
+				}
+
+				if err := restServer.AddRestTool(restTool); err != nil {
+					return fmt.Errorf("failed to add tool %s: %v", restTool.Name, err)
+				}
+				// Register tool to registry
+				opts.ToolRegistry.RegisterTool(config.serverName, restTool.Name, restServer.GetMCPTools()[restTool.Name])
+			}
+			config.server = restServer
 		} else {
 			// Logic for pre-registered Go-based servers (non-REST)
 			if opts.SkipPreRegisteredServers {
@@ -379,13 +428,13 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 	config.methodHandlers["initialize"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
 		version := params.Get("protocolVersion").String()
 		if version == "" {
-			utils.OnMCPResponseError(ctx, errors.New("Unsupported protocol version"), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
+			utils.OnMCPResponseError(ctx, errors.New("unsupported protocol version"), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
 			return nil
 		}
 
 		// Support for multiple protocol versions including 2025-06-18
 		if !slices.Contains(SupportedMCPVersions, version) {
-			utils.OnMCPResponseError(ctx, fmt.Errorf("Unsupported protocol version: %s", version), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
+			utils.OnMCPResponseError(ctx, fmt.Errorf("unsupported protocol version: %s", version), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
 			return nil
 		}
 
@@ -491,7 +540,7 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 
 			toolToCall, ok := config.server.GetMCPTools()[toolName]
 			if !ok {
-				utils.OnMCPResponseError(ctx, fmt.Errorf("Unknown tool: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:invalid_tool_name", currentServerNameForHandlers))
+				utils.OnMCPResponseError(ctx, fmt.Errorf("unknown tool: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:invalid_tool_name", currentServerNameForHandlers))
 				return nil
 			}
 
@@ -521,7 +570,7 @@ func parseConfig(context wrapper.PluginContext, configJson gjson.Result, config 
 	}
 	registry, ok := registryI.(*GlobalToolRegistry)
 	if !ok {
-		return errors.New("Invalid GlobalToolRegistry")
+		return errors.New("invalid GlobalToolRegistry")
 	}
 	// Build runtime dependencies using global variables
 	opts := &ConfigOptions{
