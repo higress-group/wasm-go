@@ -10,6 +10,7 @@ require (
 	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20250822030947-8345453fddd0
 	github.com/higress-group/wasm-go v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.9.0
+	github.com/tidwall/gjson v1.18.0
 )
 
 require (
@@ -31,7 +32,6 @@ require (
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/spf13/cast v1.7.0 // indirect
 	github.com/tetratelabs/wazero v1.7.2 // indirect
-	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/resp v0.1.1 // indirect

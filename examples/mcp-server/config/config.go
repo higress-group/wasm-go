@@ -12,20 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package config
 
-import (
-	"mcp-server/tools"
-
-	"github.com/higress-group/wasm-go/pkg/mcp"
-)
-
-func main() {}
-
-func init() {
-	// 使用 pre-registered Go-based server 而不是 REST MCP Server
-	// 这种方式允许我们实现自定义的 Go 工具，而不是依赖于配置驱动的 REST 工具
-	mcp.LoadMCPServer(mcp.AddMCPServer("weather-test-server",
-		tools.LoadTools(mcp.NewMCPServer())))
-	mcp.InitMCPServer()
+type WeatherServerConfig struct {
+	ApiKey  string `json:"apiKey"`
+	BaseURL string `json:"baseUrl,omitempty"`
 }

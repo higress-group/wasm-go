@@ -123,6 +123,20 @@ var mcpProxyServerWithAuthConfig = func() json.RawMessage {
 	return data
 }()
 
+// 内置天气MCP服务器配置
+var weatherMCPServerConfig = func() json.RawMessage {
+	data, _ := json.Marshal(map[string]interface{}{
+		"server": map[string]interface{}{
+			"name": "weather-test-server",
+			"config": map[string]interface{}{
+				"apiKey":  "test-api-key",
+				"baseUrl": "https://api.openweathermap.org/data/2.5",
+			},
+		},
+	})
+	return data
+}()
+
 // TestRestMCPServerConfig 测试REST MCP服务器配置解析
 func TestRestMCPServerConfig(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
@@ -147,6 +161,20 @@ func TestMcpProxyServerConfig(t *testing.T) {
 
 			// 对于配置解析测试，主要验证插件启动状态
 			// GetMatchConfig在WASM模式下可能有限制，我们主要关注启动成功
+		})
+	})
+}
+
+// TestWeatherMCPServerConfig 测试天气MCP服务器配置解析
+func TestWeatherMCPServerConfig(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("valid weather mcp server config", func(t *testing.T) {
+			host, status := test.NewTestHost(weatherMCPServerConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			// 对于配置解析测试，主要验证插件启动状态
+			// 内置的 weather-test-server 应该能够正确加载和配置
 		})
 	})
 }
@@ -206,6 +234,69 @@ func TestRestMCPServerBasicFlow(t *testing.T) {
 				require.True(t, ok)
 				require.Equal(t, "get_weather", tool["name"])
 				require.Equal(t, "获取天气信息", tool["description"])
+			}
+
+			host.CompleteHttp()
+		})
+	})
+}
+
+// TestWeatherMCPServerBasicFlow 测试天气MCP服务器基本流程
+func TestWeatherMCPServerBasicFlow(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		t.Run("tools/list request", func(t *testing.T) {
+			host, status := test.NewTestHost(weatherMCPServerConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			toolsListRequest := `{
+				"jsonrpc": "2.0",
+				"id": 1,
+				"method": "tools/list",
+				"params": {}
+			}`
+
+			// 初始化HTTP上下文
+			host.InitHttp()
+
+			// 处理请求头
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "weather-server.example.com"},
+				{":method", "POST"},
+				{":path", "/mcp"},
+				{"content-type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			// 处理请求体
+			action = host.CallOnHttpRequestBody([]byte(toolsListRequest))
+			require.Equal(t, types.ActionContinue, action)
+
+			// 验证响应
+			localResponse := host.GetLocalResponse()
+			if localResponse != nil && len(localResponse.Data) > 0 {
+				var response map[string]interface{}
+				err := json.Unmarshal(localResponse.Data, &response)
+				require.NoError(t, err)
+
+				// 验证JSON-RPC格式
+				require.Equal(t, "2.0", response["jsonrpc"])
+				require.Equal(t, float64(1), response["id"])
+
+				// 验证tools列表存在
+				result, ok := response["result"].(map[string]interface{})
+				require.True(t, ok)
+
+				// 验证tools数组
+				tools, ok := result["tools"].([]interface{})
+				require.True(t, ok)
+				require.Greater(t, len(tools), 0)
+
+				// 验证第一个工具
+				tool, ok := tools[0].(map[string]interface{})
+				require.True(t, ok)
+				require.Equal(t, "get_weather", tool["name"])
+				require.Contains(t, tool["description"].(string), "天气")
 			}
 
 			host.CompleteHttp()
@@ -286,6 +377,94 @@ func TestRestMCPServerToolsCall(t *testing.T) {
 		content, ok := result["content"].([]interface{})
 		require.True(t, ok)
 		require.Greater(t, len(content), 0)
+
+		host.CompleteHttp()
+	})
+}
+
+// TestWeatherMCPServerToolsCall 测试天气MCP服务器的tools/call功能
+func TestWeatherMCPServerToolsCall(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(weatherMCPServerConfig)
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+
+		toolsCallRequest := `{
+			"jsonrpc": "2.0",
+			"id": 2,
+			"method": "tools/call",
+			"params": {
+				"name": "get_weather",
+				"arguments": {
+					"location": "北京"
+				}
+			}
+		}`
+
+		// 初始化HTTP上下文
+		host.InitHttp()
+
+		// 处理请求头
+		action := host.CallOnHttpRequestHeaders([][2]string{
+			{":authority", "weather-server.example.com"},
+			{":method", "POST"},
+			{":path", "/mcp"},
+			{"content-type", "application/json"},
+		})
+		require.Equal(t, types.HeaderStopIteration, action)
+
+		// 处理请求体 - 这会触发外部HTTP调用
+		action = host.CallOnHttpRequestBody([]byte(toolsCallRequest))
+		require.Equal(t, types.ActionContinue, action)
+
+		// Mock HTTP响应头
+		action = host.CallOnHttpResponseHeaders([][2]string{
+			{":status", "200"},
+			{"Content-Type", "application/json"},
+		})
+		require.Equal(t, types.HeaderStopIteration, action)
+
+		// 处理天气API响应体（模拟OpenWeatherMap API响应）
+		weatherAPIResponse := `{
+			"name": "Beijing",
+			"sys": {"country": "CN"},
+			"weather": [{"description": "晴天"}],
+			"main": {
+				"temp": 25.5,
+				"feels_like": 27.2,
+				"humidity": 60
+			},
+			"wind": {"speed": 3.5}
+		}`
+
+		action = host.CallOnHttpResponseBody([]byte(weatherAPIResponse))
+		require.Equal(t, types.ActionContinue, action)
+
+		// 验证最终MCP响应
+		responseBody := host.GetResponseBody()
+		require.NotEmpty(t, responseBody)
+
+		var response map[string]interface{}
+		err := json.Unmarshal(responseBody, &response)
+		require.NoError(t, err)
+
+		// 验证JSON-RPC格式
+		require.Equal(t, "2.0", response["jsonrpc"])
+		require.Equal(t, float64(2), response["id"])
+
+		// 验证结果存在（Go-based MCP server会返回格式化的天气信息）
+		result, ok := response["result"].(map[string]interface{})
+		require.True(t, ok)
+
+		content, ok := result["content"].([]interface{})
+		require.True(t, ok)
+		require.Greater(t, len(content), 0)
+
+		// 验证响应内容包含天气信息的关键词
+		contentText, ok := content[0].(map[string]interface{})["text"].(string)
+		require.True(t, ok)
+		require.Contains(t, contentText, "天气信息")
+		require.Contains(t, contentText, "温度")
 
 		host.CompleteHttp()
 	})
