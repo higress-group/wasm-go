@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"reflect"
 	"slices"
 	"strings"
@@ -38,6 +39,89 @@ const (
 
 // SupportedMCPVersions contains all supported MCP protocol versions
 var SupportedMCPVersions = []string{"2024-11-05", "2025-03-26", "2025-06-18"}
+
+// validateURL validates that the given string is a valid URL
+func validateURL(urlStr string) error {
+	if urlStr == "" {
+		return errors.New("url cannot be empty")
+	}
+
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return fmt.Errorf("invalid URL format: %v", err)
+	}
+
+	if parsedURL.Scheme == "" {
+		return errors.New("url must include a scheme (http or https)")
+	}
+
+	if parsedURL.Host == "" {
+		return errors.New("url must include a host")
+	}
+
+	// Only allow http and https schemes for security
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("unsupported URL scheme '%s', only http and https are allowed", parsedURL.Scheme)
+	}
+
+	return nil
+}
+
+// setupMcpProxyServer creates and configures an MCP proxy server
+func setupMcpProxyServer(serverName string, serverJson gjson.Result, serverConfigJsonForInstance string) (*McpProxyServer, error) {
+	proxyServer := NewMcpProxyServer(serverName)
+	proxyServer.SetConfig([]byte(serverConfigJsonForInstance))
+
+	// Parse and validate mcpServerURL (required for mcp-proxy)
+	mcpServerURL := serverJson.Get("mcpServerURL").String()
+	if mcpServerURL == "" {
+		return nil, errors.New("mcpServerURL is required for mcp-proxy server type")
+	}
+	if err := validateURL(mcpServerURL); err != nil {
+		return nil, fmt.Errorf("invalid mcpServerURL: %v", err)
+	}
+	proxyServer.SetMcpServerURL(mcpServerURL)
+
+	// Parse timeout (optional)
+	timeout := serverJson.Get("timeout").Int()
+	if timeout > 0 {
+		proxyServer.SetTimeout(int(timeout))
+	}
+
+	// Parse security schemes
+	securitySchemesJson := serverJson.Get("securitySchemes")
+	if securitySchemesJson.Exists() {
+		for _, schemeJson := range securitySchemesJson.Array() {
+			var scheme SecurityScheme
+			if err := json.Unmarshal([]byte(schemeJson.Raw), &scheme); err != nil {
+				return nil, fmt.Errorf("failed to parse security scheme config: %v", err)
+			}
+			proxyServer.AddSecurityScheme(scheme)
+		}
+	}
+
+	// Parse default downstream security
+	defaultDownstreamSecurityJson := serverJson.Get("defaultDownstreamSecurity")
+	if defaultDownstreamSecurityJson.Exists() {
+		var defaultDownstreamSecurity SecurityRequirement
+		if err := json.Unmarshal([]byte(defaultDownstreamSecurityJson.Raw), &defaultDownstreamSecurity); err != nil {
+			return nil, fmt.Errorf("failed to parse defaultDownstreamSecurity config: %v", err)
+		}
+		proxyServer.SetDefaultDownstreamSecurity(defaultDownstreamSecurity)
+	}
+
+	// Parse default upstream security
+	defaultUpstreamSecurityJson := serverJson.Get("defaultUpstreamSecurity")
+	if defaultUpstreamSecurityJson.Exists() {
+		var defaultUpstreamSecurity SecurityRequirement
+		if err := json.Unmarshal([]byte(defaultUpstreamSecurityJson.Raw), &defaultUpstreamSecurity); err != nil {
+			return nil, fmt.Errorf("failed to parse defaultUpstreamSecurity config: %v", err)
+		}
+		proxyServer.SetDefaultUpstreamSecurity(defaultUpstreamSecurity)
+	}
+
+	return proxyServer, nil
+}
 
 type HttpContext wrapper.HttpContext
 
@@ -212,10 +296,41 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		serverConfigJsonForInstance = serverJson.Get("config").Raw
 		log.Infof("Parsing single server configuration: %s", config.serverName)
 
-		// Original logic for single server
-		toolsJson := configJson.Get("tools") // These are REST tools for this server instance
-		if toolsJson.Exists() && len(toolsJson.Array()) > 0 {
-			// Create REST-to-MCP server
+		// Check server type to determine which type of server to create
+		serverType := serverJson.Get("type").String()
+		if serverType == "" {
+			serverType = "rest" // Default to REST server type
+		}
+
+		toolsJson := configJson.Get("tools") // These are REST tools for this server instance or MCP proxy tools
+
+		if serverType == "mcp-proxy" {
+			// Create MCP proxy server
+			proxyServer, err := setupMcpProxyServer(config.serverName, serverJson, serverConfigJsonForInstance)
+			if err != nil {
+				return err
+			}
+
+			// Handle tools configuration (optional for MCP proxy)
+			if toolsJson.Exists() && len(toolsJson.Array()) > 0 {
+				for _, toolJson := range toolsJson.Array() {
+					var proxyTool McpProxyToolConfig
+					if err := json.Unmarshal([]byte(toolJson.Raw), &proxyTool); err != nil {
+						return fmt.Errorf("failed to parse proxy tool config: %v", err)
+					}
+
+					if err := proxyServer.AddProxyTool(proxyTool); err != nil {
+						return fmt.Errorf("failed to add proxy tool %s: %v", proxyTool.Name, err)
+					}
+					// Register tool to registry
+					opts.ToolRegistry.RegisterTool(config.serverName, proxyTool.Name, proxyServer.GetMCPTools()[proxyTool.Name])
+				}
+			}
+			// Set the proxy server regardless of whether tools are configured
+			config.server = proxyServer
+		} else if toolsJson.Exists() && len(toolsJson.Array()) > 0 {
+			// Handle REST-to-MCP server (requires tools configuration)
+			// Create REST-to-MCP server (default behavior)
 			restServer := NewRestMCPServer(config.serverName)         // Pass the server name
 			restServer.SetConfig([]byte(serverConfigJsonForInstance)) // Pass the server's specific config
 
@@ -228,6 +343,26 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 					}
 					restServer.AddSecurityScheme(scheme)
 				}
+			}
+
+			// Parse default downstream security
+			defaultDownstreamSecurityJson := serverJson.Get("defaultDownstreamSecurity")
+			if defaultDownstreamSecurityJson.Exists() {
+				var defaultDownstreamSecurity SecurityRequirement
+				if err := json.Unmarshal([]byte(defaultDownstreamSecurityJson.Raw), &defaultDownstreamSecurity); err != nil {
+					return fmt.Errorf("failed to parse defaultDownstreamSecurity config: %v", err)
+				}
+				restServer.SetDefaultDownstreamSecurity(defaultDownstreamSecurity)
+			}
+
+			// Parse default upstream security
+			defaultUpstreamSecurityJson := serverJson.Get("defaultUpstreamSecurity")
+			if defaultUpstreamSecurityJson.Exists() {
+				var defaultUpstreamSecurity SecurityRequirement
+				if err := json.Unmarshal([]byte(defaultUpstreamSecurityJson.Raw), &defaultUpstreamSecurity); err != nil {
+					return fmt.Errorf("failed to parse defaultUpstreamSecurity config: %v", err)
+				}
+				restServer.SetDefaultUpstreamSecurity(defaultUpstreamSecurity)
 			}
 
 			for _, toolJson := range toolsJson.Array() {
@@ -293,13 +428,13 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 	config.methodHandlers["initialize"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
 		version := params.Get("protocolVersion").String()
 		if version == "" {
-			utils.OnMCPResponseError(ctx, errors.New("Unsupported protocol version"), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
+			utils.OnMCPResponseError(ctx, errors.New("unsupported protocol version"), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
 			return nil
 		}
 
 		// Support for multiple protocol versions including 2025-06-18
 		if !slices.Contains(SupportedMCPVersions, version) {
-			utils.OnMCPResponseError(ctx, fmt.Errorf("Unsupported protocol version: %s", version), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
+			utils.OnMCPResponseError(ctx, fmt.Errorf("unsupported protocol version: %s", version), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
 			return nil
 		}
 
@@ -316,92 +451,108 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		return nil
 	}
 
-	config.methodHandlers["tools/list"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
-		var listedTools []map[string]any
-		// GetMCPTools() will return appropriately formatted tools for both single and composed servers
-		allTools := config.server.GetMCPTools() // For composed, keys are "serverName/toolName"
-		allowToolsHeaderStr, _ := proxywasm.GetHttpRequestHeader("x-envoy-allow-mcp-tools")
-		proxywasm.RemoveHttpRequestHeader("x-envoy-allow-mcp-tools")
-		allowToolsFromHeader := make(map[string]struct{})
-		for tool := range strings.SplitSeq(allowToolsHeaderStr, ",") {
-			trimmedTool := strings.TrimSpace(tool)
-			if trimmedTool == "" {
-				continue
-			}
-			allowToolsFromHeader[trimmedTool] = struct{}{}
+	// Override tools/list and tools/call handlers for MCP proxy servers first
+	if config.server != nil {
+		if proxyServer, ok := config.server.(*McpProxyServer); ok {
+			// Use MCP proxy specific handlers that support ActionPause
+			proxyHandlers := CreateMcpProxyMethodHandlers(proxyServer, allowTools)
+			config.methodHandlers["tools/list"] = proxyHandlers["tools/list"]
+			config.methodHandlers["tools/call"] = proxyHandlers["tools/call"]
 		}
-		for toolFullName, tool := range allTools {
-			// For composed server, toolFullName is "originalServerName/originalToolName"
-			// For single server, toolFullName is "originalToolName"
-			// The allowTools map should use the same format as toolFullName
-			if len(allowTools) != 0 {
-				if _, allow := allowTools[toolFullName]; !allow {
-					continue
-				}
-			}
-			if len(allowToolsFromHeader) != 0 {
-				if _, allow := allowToolsFromHeader[toolFullName]; !allow {
-					continue
-				}
-			}
-			toolDef := map[string]any{
-				"name":        toolFullName,
-				"description": tool.Description(),
-				"inputSchema": tool.InputSchema(),
-			}
-			// Add outputSchema if tool implements ToolWithOutputSchema (MCP Protocol Version 2025-06-18)
-			if toolWithSchema, ok := tool.(ToolWithOutputSchema); ok {
-				if outputSchema := toolWithSchema.OutputSchema(); outputSchema != nil && len(outputSchema) > 0 {
-					toolDef["outputSchema"] = outputSchema
-				}
-			}
-			listedTools = append(listedTools, toolDef)
-		}
-		utils.OnMCPResponseSuccess(ctx, map[string]any{
-			"tools": listedTools,
-		}, fmt.Sprintf("mcp:%s:tools/list", currentServerNameForHandlers))
-		return nil
 	}
 
-	config.methodHandlers["tools/call"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
-		if config.isComposed {
-			// This endpoint is for a composed server (toolSet).
-			// Actual tool calls should be routed by mcp-router to individual servers.
-			// If a tools/call request reaches here, it's a misconfiguration or unexpected.
-			errMsg := fmt.Sprintf("tools/call is not supported on a composed toolSet endpoint ('%s'). It should be routed by mcp-router to the target server.", currentServerNameForHandlers)
-			log.Errorf(errMsg)
-			utils.OnMCPResponseError(ctx, errors.New(errMsg), utils.ErrMethodNotFound, fmt.Sprintf("mcp:%s:tools/call:not_supported_on_toolset", currentServerNameForHandlers))
+	// Default tools/list handler for non-proxy servers
+	if config.methodHandlers["tools/list"] == nil {
+		config.methodHandlers["tools/list"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
+			var listedTools []map[string]any
+			// GetMCPTools() will return appropriately formatted tools for both single and composed servers
+			allTools := config.server.GetMCPTools() // For composed, keys are "serverName/toolName"
+			allowToolsHeaderStr, _ := proxywasm.GetHttpRequestHeader("x-envoy-allow-mcp-tools")
+			proxywasm.RemoveHttpRequestHeader("x-envoy-allow-mcp-tools")
+			allowToolsFromHeader := make(map[string]struct{})
+			for tool := range strings.SplitSeq(allowToolsHeaderStr, ",") {
+				trimmedTool := strings.TrimSpace(tool)
+				if trimmedTool == "" {
+					continue
+				}
+				allowToolsFromHeader[trimmedTool] = struct{}{}
+			}
+			for toolFullName, tool := range allTools {
+				// For composed server, toolFullName is "originalServerName/originalToolName"
+				// For single server, toolFullName is "originalToolName"
+				// The allowTools map should use the same format as toolFullName
+				if len(allowTools) != 0 {
+					if _, allow := allowTools[toolFullName]; !allow {
+						continue
+					}
+				}
+				if len(allowToolsFromHeader) != 0 {
+					if _, allow := allowToolsFromHeader[toolFullName]; !allow {
+						continue
+					}
+				}
+				toolDef := map[string]any{
+					"name":        toolFullName,
+					"description": tool.Description(),
+					"inputSchema": tool.InputSchema(),
+				}
+				// Add outputSchema if tool implements ToolWithOutputSchema (MCP Protocol Version 2025-06-18)
+				if toolWithSchema, ok := tool.(ToolWithOutputSchema); ok {
+					if outputSchema := toolWithSchema.OutputSchema(); len(outputSchema) > 0 {
+						toolDef["outputSchema"] = outputSchema
+					}
+				}
+				listedTools = append(listedTools, toolDef)
+			}
+			utils.OnMCPResponseSuccess(ctx, map[string]any{
+				"tools": listedTools,
+			}, fmt.Sprintf("mcp:%s:tools/list", currentServerNameForHandlers))
 			return nil
 		}
+	}
 
-		// Logic for single (non-composed) server
-		toolName := params.Get("name").String() // For single server, this is the direct tool name
-		args := params.Get("arguments")
-
-		if len(allowTools) != 0 {
-			if _, allow := allowTools[toolName]; !allow {
-				utils.OnMCPResponseError(ctx, fmt.Errorf("Tool not allowed: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:tool_not_allowed", currentServerNameForHandlers))
+	// Default tools/call handler for non-proxy servers
+	if config.methodHandlers["tools/call"] == nil {
+		config.methodHandlers["tools/call"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
+			if config.isComposed {
+				// This endpoint is for a composed server (toolSet).
+				// Actual tool calls should be routed by mcp-router to individual servers.
+				// If a tools/call request reaches here, it's a misconfiguration or unexpected.
+				errMsg := fmt.Sprintf("tools/call is not supported on a composed toolSet endpoint ('%s'). It should be routed by mcp-router to the target server.", currentServerNameForHandlers)
+				log.Errorf(errMsg)
+				utils.OnMCPResponseError(ctx, errors.New(errMsg), utils.ErrMethodNotFound, fmt.Sprintf("mcp:%s:tools/call:not_supported_on_toolset", currentServerNameForHandlers))
 				return nil
 			}
-		}
 
-		proxywasm.SetProperty([]string{"mcp_server_name"}, []byte(currentServerNameForHandlers))
-		proxywasm.SetProperty([]string{"mcp_tool_name"}, []byte(toolName))
+			// Logic for single (non-composed) server
+			toolName := params.Get("name").String() // For single server, this is the direct tool name
+			args := params.Get("arguments")
 
-		toolToCall, ok := config.server.GetMCPTools()[toolName]
-		if !ok {
-			utils.OnMCPResponseError(ctx, fmt.Errorf("Unknown tool: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:invalid_tool_name", currentServerNameForHandlers))
+			if len(allowTools) != 0 {
+				if _, allow := allowTools[toolName]; !allow {
+					utils.OnMCPResponseError(ctx, fmt.Errorf("Tool not allowed: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:tool_not_allowed", currentServerNameForHandlers))
+					return nil
+				}
+			}
+
+			proxywasm.SetProperty([]string{"mcp_server_name"}, []byte(currentServerNameForHandlers))
+			proxywasm.SetProperty([]string{"mcp_tool_name"}, []byte(toolName))
+
+			toolToCall, ok := config.server.GetMCPTools()[toolName]
+			if !ok {
+				utils.OnMCPResponseError(ctx, fmt.Errorf("unknown tool: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:invalid_tool_name", currentServerNameForHandlers))
+				return nil
+			}
+
+			log.Debugf("Tool call [%s] on server [%s] with arguments[%s]", toolName, currentServerNameForHandlers, args.Raw)
+			toolInstance := toolToCall.Create([]byte(args.Raw))
+			err := toolInstance.Call(ctx, config.server) // Pass the single server instance
+			if err != nil {
+				utils.OnMCPToolCallError(ctx, err)
+				return nil
+			}
 			return nil
 		}
-
-		log.Debugf("Tool call [%s] on server [%s] with arguments[%s]", toolName, currentServerNameForHandlers, args.Raw)
-		toolInstance := toolToCall.Create([]byte(args.Raw))
-		err := toolInstance.Call(ctx, config.server) // Pass the single server instance
-		if err != nil {
-			utils.OnMCPToolCallError(ctx, err)
-			return nil
-		}
-		return nil
 	}
 
 	return nil
@@ -419,7 +570,7 @@ func parseConfig(context wrapper.PluginContext, configJson gjson.Result, config 
 	}
 	registry, ok := registryI.(*GlobalToolRegistry)
 	if !ok {
-		return errors.New("Invalid GlobalToolRegistry")
+		return errors.New("invalid GlobalToolRegistry")
 	}
 	// Build runtime dependencies using global variables
 	opts := &ConfigOptions{
