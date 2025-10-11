@@ -879,8 +879,8 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 	if ctx.plugin.vm.rebuildAfterRequests > 0 {
 		ctx.plugin.vm.requestCount++
 		if ctx.plugin.vm.requestCount >= ctx.plugin.vm.rebuildAfterRequests {
-			proxywasm.SetProperty([]string{"wasm_rebuild"}, []byte("true"))
-			ctx.plugin.vm.log.Infof("Plugin reached rebuild threshold after %d requests, rebuild flag set", ctx.plugin.vm.requestCount)
+			proxywasm.SetProperty([]string{"wasm_need_rebuild"}, []byte("true"))
+			ctx.plugin.vm.log.Debugf("Plugin reached rebuild threshold after %d requests, rebuild flag set", ctx.plugin.vm.requestCount)
 		}
 	}
 
