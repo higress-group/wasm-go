@@ -15,6 +15,8 @@
 package server
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -68,6 +70,32 @@ func NewMcpProtocolHandler(backendURL string, timeout int) *McpProtocolHandler {
 	}
 }
 
+// parseSSEResponse parses Server-Sent Events format and extracts data field content
+func parseSSEResponse(sseData []byte) ([]byte, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(sseData))
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, ":") {
+			continue
+		}
+
+		// Look for data field
+		if strings.HasPrefix(line, "data: ") {
+			dataContent := strings.TrimPrefix(line, "data: ")
+			return []byte(dataContent), nil
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading SSE data: %v", err)
+	}
+
+	return nil, fmt.Errorf("no data field found in SSE response")
+}
+
 // Initialize performs the MCP protocol initialization sequence asynchronously
 func (h *McpProtocolHandler) Initialize(ctx wrapper.HttpContext, authInfo *ProxyAuthInfo) error {
 	log.Infof("Starting MCP protocol initialization for %s", h.backendURL)
@@ -98,9 +126,38 @@ func (h *McpProtocolHandler) Initialize(ctx wrapper.HttpContext, authInfo *Proxy
 			return
 		}
 
+		// Determine response content type and parse accordingly
+		var jsonResponseBody []byte
+		var contentType string
+
+		// Find content-type header
+		for _, header := range responseHeaders {
+			if strings.ToLower(header[0]) == "content-type" {
+				contentType = strings.ToLower(header[1])
+				break
+			}
+		}
+
+		// Parse response based on content type
+		if strings.Contains(contentType, "text/event-stream") {
+			// Handle SSE format
+			log.Debugf("Processing SSE response for initialize request")
+			parsedJSON, err := parseSSEResponse(responseBody)
+			if err != nil {
+				log.Errorf("Failed to parse SSE response: %v", err)
+				utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:initialize:sse_parse_error")
+				return
+			}
+			jsonResponseBody = parsedJSON
+		} else {
+			// Handle JSON format (default)
+			log.Debugf("Processing JSON response for initialize request")
+			jsonResponseBody = responseBody
+		}
+
 		// Parse initialize response
 		var response map[string]interface{}
-		if err := json.Unmarshal(responseBody, &response); err != nil {
+		if err := json.Unmarshal(jsonResponseBody, &response); err != nil {
 			log.Errorf("Failed to parse initialize response: %v", err)
 			utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:initialize:parse_error")
 			return
@@ -179,6 +236,7 @@ func (h *McpProtocolHandler) executeToolsList(ctx wrapper.HttpContext) error {
 
 	headers := [][2]string{
 		{"Content-Type", "application/json"},
+		{"Accept", "application/json,text/event-stream"},
 	}
 
 	// Add session ID if we have one
@@ -212,9 +270,38 @@ func (h *McpProtocolHandler) executeToolsList(ctx wrapper.HttpContext) error {
 			return
 		}
 
+		// Determine response content type and parse accordingly
+		var jsonResponseBody []byte
+		var contentType string
+
+		// Find content-type header
+		for _, header := range responseHeaders {
+			if strings.ToLower(header[0]) == "content-type" {
+				contentType = strings.ToLower(header[1])
+				break
+			}
+		}
+
+		// Parse response based on content type
+		if strings.Contains(contentType, "text/event-stream") {
+			// Handle SSE format
+			log.Debugf("Processing SSE response for tools/list request")
+			parsedJSON, err := parseSSEResponse(responseBody)
+			if err != nil {
+				log.Errorf("Failed to parse SSE response: %v", err)
+				utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:tools/list:sse_parse_error")
+				return
+			}
+			jsonResponseBody = parsedJSON
+		} else {
+			// Handle JSON format (default)
+			log.Debugf("Processing JSON response for tools/list request")
+			jsonResponseBody = responseBody
+		}
+
 		// Parse response and forward to client
 		var response map[string]interface{}
-		if err := json.Unmarshal(responseBody, &response); err != nil {
+		if err := json.Unmarshal(jsonResponseBody, &response); err != nil {
 			log.Errorf("Failed to parse tools/list response: %v", err)
 			utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:tools/list:parse_error")
 			return
@@ -270,6 +357,7 @@ func (h *McpProtocolHandler) executeToolsCall(ctx wrapper.HttpContext) error {
 
 	headers := [][2]string{
 		{"Content-Type", "application/json"},
+		{"Accept", "application/json,text/event-stream"},
 	}
 
 	// Add session ID if we have one
@@ -303,16 +391,45 @@ func (h *McpProtocolHandler) executeToolsCall(ctx wrapper.HttpContext) error {
 			return
 		}
 
+		// Determine response content type and parse accordingly
+		var jsonResponseBody []byte
+		var contentType string
+
+		// Find content-type header
+		for _, header := range responseHeaders {
+			if strings.ToLower(header[0]) == "content-type" {
+				contentType = strings.ToLower(header[1])
+				break
+			}
+		}
+
+		// Parse response based on content type
+		if strings.Contains(contentType, "text/event-stream") {
+			// Handle SSE format
+			log.Debugf("Processing SSE response for tools/call request")
+			parsedJSON, err := parseSSEResponse(responseBody)
+			if err != nil {
+				log.Errorf("Failed to parse SSE response: %v", err)
+				utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:tools/call:sse_parse_error")
+				return
+			}
+			jsonResponseBody = parsedJSON
+		} else {
+			// Handle JSON format (default)
+			log.Debugf("Processing JSON response for tools/call request")
+			jsonResponseBody = responseBody
+		}
+
 		// Parse response to check for backend errors
 		var callResponse map[string]interface{}
-		if err := json.Unmarshal(responseBody, &callResponse); err == nil {
+		if err := json.Unmarshal(jsonResponseBody, &callResponse); err == nil {
 			if result, hasResult := callResponse["result"]; hasResult {
 				if resultMap, ok := result.(map[string]interface{}); ok {
 					if isError, hasIsError := resultMap["isError"]; hasIsError && isError == true {
 						// Backend reported an error through isError flag
 						log.Warnf("Backend reported tool call error for %s", toolName)
 						// Still forward the response but with source attribution
-						h.wrapBackendError(responseBody, ctx)
+						h.wrapBackendError(jsonResponseBody, ctx)
 						return
 					}
 				}
@@ -321,7 +438,7 @@ func (h *McpProtocolHandler) executeToolsCall(ctx wrapper.HttpContext) error {
 
 		// Parse response and forward to client
 		var finalResponse map[string]interface{}
-		if err := json.Unmarshal(responseBody, &finalResponse); err != nil {
+		if err := json.Unmarshal(jsonResponseBody, &finalResponse); err != nil {
 			log.Errorf("Failed to parse tools/call response: %v", err)
 			utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:tools/call:parse_error")
 			return
@@ -344,6 +461,7 @@ func (h *McpProtocolHandler) executeToolsCall(ctx wrapper.HttpContext) error {
 func (h *McpProtocolHandler) sendMcpRequest(ctx wrapper.HttpContext, body []byte, authInfo *ProxyAuthInfo, callback func(int, [][2]string, []byte)) error {
 	headers := [][2]string{
 		{"Content-Type", "application/json"},
+		{"Accept", "application/json,text/event-stream"},
 	}
 
 	// Add session ID if we have one
@@ -427,7 +545,7 @@ func (h *McpProtocolHandler) sendInitializedNotification(ctx wrapper.HttpContext
 		// Always resume at the end, regardless of success or failure
 		defer proxywasm.ResumeHttpRequest()
 
-		if statusCode != 200 {
+		if statusCode >= 300 {
 			log.Warnf("Initialized notification failed with status %d: %s", statusCode, string(responseBody))
 			// Even if notification fails, we can still proceed with the operation
 			// The backend might still be functional for actual tool calls
@@ -667,7 +785,7 @@ func CreateMcpProxyMethodHandlers(server *McpProxyServer, allowTools map[string]
 			// Create a tool instance and call it
 			toolConfig, exists := server.GetToolConfig(toolName)
 			if !exists {
-				return fmt.Errorf("tool not found: %s", toolName)
+				log.Warnf("tool not found: %s, will not use tool specifiy security config", toolName)
 			}
 
 			// Debug logging (consistent with default handler)

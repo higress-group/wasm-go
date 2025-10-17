@@ -291,4 +291,85 @@ func TestBackendErrorHandling(t *testing.T) {
 	assert.Equal(t, "failing_tool", toolInstance.(*McpProxyTool).name)
 }
 
+// TestParseSSEResponse tests the SSE response parsing functionality
+func TestParseSSEResponse(t *testing.T) {
+	tests := []struct {
+		name         string
+		sseData      string
+		expectedData string
+		shouldErr    bool
+	}{
+		{
+			name: "valid SSE with JSON data",
+			sseData: `event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"experimental":{},"prompts":{"listChanged":true},"resources":{"subscribe":false,"listChanged":true},"tools":{"listChanged":true}},"serverInfo":{"name":"Echo Server","version":"1.17.0"}}}
+
+`,
+			expectedData: `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"experimental":{},"prompts":{"listChanged":true},"resources":{"subscribe":false,"listChanged":true},"tools":{"listChanged":true}},"serverInfo":{"name":"Echo Server","version":"1.17.0"}}}`,
+			shouldErr:    false,
+		},
+		{
+			name: "SSE with multiple lines",
+			sseData: `event: message
+data: {"jsonrpc":"2.0","id":2,"result":{"success":true}}
+
+event: close
+data: {"jsonrpc":"2.0","method":"close"}
+
+`,
+			expectedData: `{"jsonrpc":"2.0","id":2,"result":{"success":true}}`,
+			shouldErr:    false,
+		},
+		{
+			name: "SSE with comments and empty lines",
+			sseData: `: This is a comment
+event: message
+
+data: {"jsonrpc":"2.0","id":3,"result":{"test":true}}
+
+: Another comment
+`,
+			expectedData: `{"jsonrpc":"2.0","id":3,"result":{"test":true}}`,
+			shouldErr:    false,
+		},
+		{
+			name: "SSE with any data content",
+			sseData: `event: message
+data: {invalid json}
+
+`,
+			expectedData: `{invalid json}`,
+			shouldErr:    false,
+		},
+		{
+			name: "SSE with no data field",
+			sseData: `event: message
+id: 123
+
+`,
+			shouldErr: true,
+		},
+		{
+			name:      "empty SSE data",
+			sseData:   ``,
+			shouldErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseSSEResponse([]byte(tt.sseData))
+
+			if tt.shouldErr {
+				assert.Error(t, err)
+				assert.Nil(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, result)
+				assert.Equal(t, tt.expectedData, string(result))
+			}
+		})
+	}
+}
+
 // ForwardToolsList is now implemented in proxy_server.go

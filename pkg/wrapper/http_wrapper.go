@@ -137,12 +137,12 @@ func HttpCall(cluster Cluster, method, rawURL string, headers [][2]string, body 
 			}
 			headers.Add(h[0], h[1])
 		}
-		proxywasm.LogDebugf("http call end, id: %s, code: %d, normal: %t, body: %s",
+		proxywasm.LogInfof("http call end, id: %s, code: %d, normal: %t, body: %s",
 			requestID, code, normalResponse, strings.ReplaceAll(string(respBody), "\n", `\n`))
 		callback(code, headers, respBody)
 	})
 	if err == nil {
-		proxywasm.LogDebugf("http call start, id: %s, cluster: %s, method: %s, url: %s, headers: %#v, body: %s, timeout: %d",
+		proxywasm.LogInfof("http call start, id: %s, cluster: %s, method: %s, url: %s, headers: %#v, body: %s, timeout: %d",
 			requestID, cluster.ClusterName(), method, rawURL, headers, strings.ReplaceAll(string(body), "\n", `\n`), timeout)
 	}
 	return err
