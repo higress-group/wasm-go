@@ -1987,7 +1987,7 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 
 			host.CompleteHttp()
 
-			// 验证响应包含所有工具（空白header不应该过滤任何工具）
+			// 验证响应不包含任何工具（空白header应该被当作配置为空，禁止所有工具）
 			responseBody := host.GetResponseBody()
 			require.NotEmpty(t, responseBody)
 
@@ -2003,8 +2003,121 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 			require.True(t, hasTools)
 			toolsArray := tools.([]interface{})
 
-			// 应该返回所有工具，因为空白header等于没有过滤
-			require.Len(t, toolsArray, 2)
+			// 应该返回0个工具，因为空白header等于配置为空数组，禁止所有工具
+			require.Len(t, toolsArray, 0)
 		})
+
+		// 测试不存在的allowTools header（应该允许所有工具）
+		t.Run("no header allowTools", func(t *testing.T) {
+			host, status := test.NewTestHost(mcpProxyServerConfig)
+			defer host.Reset()
+			require.Equal(t, types.OnPluginStartStatusOK, status)
+
+			toolsListRequest := `{
+				"jsonrpc": "2.0",
+				"id": 5,
+				"method": "tools/list",
+				"params": {}
+			}`
+
+			host.InitHttp()
+			// 不设置x-envoy-allow-mcp-tools header
+			action := host.CallOnHttpRequestHeaders([][2]string{
+				{":authority", "mcp-server.example.com"},
+				{":method", "POST"},
+				{":path", "/mcp"},
+				{"content-type", "application/json"},
+			})
+			require.Equal(t, types.HeaderStopIteration, action)
+
+			action = host.CallOnHttpRequestBody([]byte(toolsListRequest))
+			require.Equal(t, types.ActionPause, action)
+
+			// Mock MCP initialization sequence
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+				{"mcp-session-id", "test-session-no-header"},
+			}, []byte(`{
+				"jsonrpc": "2.0",
+				"id": "init-5",
+				"result": {
+					"capabilities": {
+						"tools": {"listChanged": true}
+					},
+					"protocolVersion": "2024-11-05"
+				}
+			}`))
+
+			host.CallOnHttpCall([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+				{"mcp-session-id", "test-session-no-header"},
+			}, []byte(`{
+				"jsonrpc": "2.0",
+				"id": "notify-5",
+				"result": {}
+			}`))
+
+			// Mock tools/list response with multiple tools
+			host.CallOnHttpResponseHeaders([][2]string{
+				{":status", "200"},
+				{"content-type", "application/json"},
+			})
+			host.CallOnHttpResponseBody([]byte(`{
+				"jsonrpc": "2.0",
+				"id": 5,
+				"result": {
+					"tools": [
+						{
+							"name": "get_product",
+							"description": "Get product information",
+							"inputSchema": {"type": "object"}
+						},
+						{
+							"name": "create_order",
+							"description": "Create a new order",
+							"inputSchema": {"type": "object"}
+						},
+						{
+							"name": "delete_user",
+							"description": "Delete a user account",
+							"inputSchema": {"type": "object"}
+						}
+					]
+				}
+			}`))
+
+			host.CompleteHttp()
+
+			// 验证响应包含所有工具（header不存在时允许所有工具）
+			responseBody := host.GetResponseBody()
+			require.NotEmpty(t, responseBody)
+
+			var response map[string]interface{}
+			err := json.Unmarshal(responseBody, &response)
+			require.NoError(t, err)
+
+			result, hasResult := response["result"]
+			require.True(t, hasResult)
+			resultMap := result.(map[string]interface{})
+
+			tools, hasTools := resultMap["tools"]
+			require.True(t, hasTools)
+			toolsArray := tools.([]interface{})
+
+			// 应该返回所有3个工具，因为header不存在意味着没有限制
+			require.Len(t, toolsArray, 3)
+
+			toolNames := make([]string, 0)
+			for _, tool := range toolsArray {
+				toolMap := tool.(map[string]interface{})
+				toolNames = append(toolNames, toolMap["name"].(string))
+			}
+			require.Contains(t, toolNames, "get_product")
+			require.Contains(t, toolNames, "create_order")
+			require.Contains(t, toolNames, "delete_user")
+		})
+
 	})
 }

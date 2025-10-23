@@ -47,6 +47,93 @@ Plugin execution priority: `30`
 | ------------ | --------------- | -------- | ------ | --------------------------------------------- |
 | `allowTools` | array of string | No       | -      | List of tools allowed to be called. If not specified, all tools are allowed |
 
+#### Dynamic Tool Permission Control
+
+In addition to statically defining `allowTools` in the configuration, tool access permissions can be dynamically controlled through the HTTP request header `x-envoy-allow-mcp-tools`. This allows upstream plugins (such as authentication and authorization plugins) to dynamically set the list of allowed tools based on user identity or other conditions.
+
+**Header Format**:
+```
+x-envoy-allow-mcp-tools: tool1,tool2,tool3
+```
+
+**Permission Control Logic**:
+
+1. **Configuration-level `allowTools`** (static): Base tool whitelist defined in the plugin configuration
+2. **Header-level `x-envoy-allow-mcp-tools`** (dynamic): Tool whitelist read from request header
+3. **Effective Permissions**: **Intersection** of tools specified in both configuration and header
+
+**Header Value Semantics**:
+
+| Header State | Behavior |
+|------------|------|
+| Header not present | No additional restriction, use `allowTools` from configuration |
+| Header is empty string `""` | No additional restriction, use `allowTools` from configuration |
+| Header is whitespace string `"  ,  ,  "` | Deny access to all tools (empty set) |
+| Header has value `"tool1,tool2"` | Intersect with configured `allowTools` |
+
+**Usage Scenarios**:
+
+1. **Role-Based Access Control**
+   ```yaml
+   # Define all available tools in configuration
+   allowTools:
+   - get-user-info
+   - update-user-info
+   - delete-user-info
+   - admin-operation
+   ```
+   
+   Upstream authentication plugin can set different tool permissions based on user roles:
+   - Regular users: `x-envoy-allow-mcp-tools: get-user-info`
+   - Advanced users: `x-envoy-allow-mcp-tools: get-user-info,update-user-info`
+   - Administrators: Don't set header (allow all configured tools)
+
+2. **Multi-Tenant Scenario**
+   ```yaml
+   # Define tools available for tenants
+   allowTools:
+   - tenant-query-data
+   - tenant-update-data
+   - tenant-report
+   ```
+   
+   Upstream plugin dynamically controls based on tenant subscription plan:
+   - Basic plan: `x-envoy-allow-mcp-tools: tenant-query-data`
+   - Professional plan: `x-envoy-allow-mcp-tools: tenant-query-data,tenant-update-data`
+   - Enterprise plan: `x-envoy-allow-mcp-tools: tenant-query-data,tenant-update-data,tenant-report`
+
+3. **Temporary Permission Restriction**
+   
+   In special circumstances (e.g., system maintenance), upstream plugins can temporarily restrict access to certain tools:
+   ```
+   x-envoy-allow-mcp-tools: read-only-tool1,read-only-tool2
+   ```
+
+**Upstream Plugin Integration Guide**:
+
+For upstream plugins (such as authentication and authorization plugins) that need to dynamically set tool permissions, **you must use `proxywasm.ReplaceHttpRequestHeader`** to set the `x-envoy-allow-mcp-tools` header:
+
+```go
+// Correct way: Use ReplaceHttpRequestHeader
+// This will override any value that users might have passed in, ensuring security
+proxywasm.ReplaceHttpRequestHeader("x-envoy-allow-mcp-tools", "tool1,tool2,tool3")
+
+// ❌ Wrong way: Use AddHttpRequestHeader
+// This may retain user-provided values, creating a security vulnerability
+proxywasm.AddHttpRequestHeader("x-envoy-allow-mcp-tools", "tool1,tool2,tool3")
+```
+
+Using `ReplaceHttpRequestHeader` ensures:
+1. **Security**: Users cannot bypass permission controls by directly passing the `x-envoy-allow-mcp-tools` header in their requests
+2. **Reliability**: The permission configuration set by the upstream plugin always takes effect and won't be overridden by user input
+3. **Predictability**: The MCP Server plugin always receives the permission value set by the upstream plugin
+
+**Notes**:
+- Header value uses comma to separate multiple tool names
+- Whitespace before and after tool names is automatically trimmed
+- When configured `allowTools` is an empty array, all tool access is denied regardless of header settings
+- The MCP Server plugin automatically removes the `x-envoy-allow-mcp-tools` header and doesn't pass it to backend services
+
 ### REST-to-MCP Tool Configuration
 
 | Name                          | Data Type        | Required | Default | Description                           |

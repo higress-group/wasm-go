@@ -733,7 +733,7 @@ func (m *McpSessionManagerImpl) CleanupExpiredSessions(maxAge time.Duration) {
 }
 
 // CreateMcpProxyMethodHandlers creates JSON-RPC method handlers for MCP proxy operations
-func CreateMcpProxyMethodHandlers(server *McpProxyServer, allowTools map[string]struct{}) utils.MethodHandlers {
+func CreateMcpProxyMethodHandlers(server *McpProxyServer, allowTools *map[string]struct{}) utils.MethodHandlers {
 	return utils.MethodHandlers{
 		"tools/list": func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
 			// Extract cursor parameter if present
@@ -743,18 +743,20 @@ func CreateMcpProxyMethodHandlers(server *McpProxyServer, allowTools map[string]
 				cursor = &cursorStr
 			}
 
-			// Extract allowTools information from headers and store in context for callback use
+			// Extract allowTools from header and compute effective allowTools
 			allowToolsHeaderStr, _ := proxywasm.GetHttpRequestHeader("x-envoy-allow-mcp-tools")
 			proxywasm.RemoveHttpRequestHeader("x-envoy-allow-mcp-tools")
-			ctx.SetContext("mcp_proxy_allow_tools_header", allowToolsHeaderStr)
+			// Only consider header as "present" if it has non-empty value
+			// Empty string means header is not set or explicitly empty, both treated as "no restriction"
+			headerExists := allowToolsHeaderStr != ""
+			effectiveAllowTools := computeEffectiveAllowToolsFromHeader(allowTools, allowToolsHeaderStr, headerExists)
 
-			// Store server reference and allowTools in context for use in callback
+			// Store server reference and effective allowTools in context for callback use
 			ctx.SetContext("mcp_proxy_server", server)
-			ctx.SetContext("mcp_proxy_allow_tools", allowTools)
+			ctx.SetContext("mcp_proxy_effective_allow_tools", effectiveAllowTools)
 
 			// This will trigger async initialization if needed
-			err := server.ForwardToolsList(ctx, cursor)
-			if err != nil {
+			if err := server.ForwardToolsList(ctx, cursor); err != nil {
 				return err
 			}
 
@@ -767,6 +769,17 @@ func CreateMcpProxyMethodHandlers(server *McpProxyServer, allowTools map[string]
 			toolName := params.Get("name").String()
 			if toolName == "" {
 				return fmt.Errorf("missing tool name")
+			}
+
+			// Compute effective allowTools using helper function
+			effectiveAllowTools := computeEffectiveAllowTools(allowTools)
+
+			// Check if tool is allowed
+			if effectiveAllowTools != nil {
+				if _, allow := (*effectiveAllowTools)[toolName]; !allow {
+					utils.OnMCPResponseError(ctx, fmt.Errorf("Tool not allowed: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp-proxy:%s:tools/call:tool_not_allowed", server.Name))
+					return nil
+				}
 			}
 
 			// Extract arguments (optional)
@@ -813,32 +826,16 @@ func CreateMcpProxyMethodHandlers(server *McpProxyServer, allowTools map[string]
 
 // applyAllowToolsFilter applies allowTools filtering to the tools/list response
 func (h *McpProtocolHandler) applyAllowToolsFilter(ctx wrapper.HttpContext, resultMap map[string]interface{}) map[string]interface{} {
-	// Get allowTools configuration from context
-	var allowTools map[string]struct{}
-	if allowToolsCtx := ctx.GetContext("mcp_proxy_allow_tools"); allowToolsCtx != nil {
-		if allowToolsMap, ok := allowToolsCtx.(map[string]struct{}); ok {
-			allowTools = allowToolsMap
-		}
-	}
-	if allowTools == nil {
-		allowTools = make(map[string]struct{})
-	}
-
-	// Get allowTools from request header (stored earlier in context)
-	allowToolsFromHeader := make(map[string]struct{})
-	if allowToolsHeaderStr := ctx.GetContext("mcp_proxy_allow_tools_header"); allowToolsHeaderStr != nil {
-		headerStr := allowToolsHeaderStr.(string)
-		for tool := range strings.SplitSeq(headerStr, ",") {
-			trimmedTool := strings.TrimSpace(tool)
-			if trimmedTool == "" {
-				continue
-			}
-			allowToolsFromHeader[trimmedTool] = struct{}{}
+	// Get pre-computed effective allowTools from context
+	var effectiveAllowTools *map[string]struct{}
+	if allowToolsCtx := ctx.GetContext("mcp_proxy_effective_allow_tools"); allowToolsCtx != nil {
+		if allowToolsPtr, ok := allowToolsCtx.(*map[string]struct{}); ok {
+			effectiveAllowTools = allowToolsPtr
 		}
 	}
 
-	// If no filtering is needed, return original result
-	if len(allowTools) == 0 && len(allowToolsFromHeader) == 0 {
+	// If no restrictions, return original result
+	if effectiveAllowTools == nil {
 		return resultMap
 	}
 
@@ -851,20 +848,10 @@ func (h *McpProtocolHandler) applyAllowToolsFilter(ctx wrapper.HttpContext, resu
 				if toolMap, ok := tool.(map[string]interface{}); ok {
 					if name, hasName := toolMap["name"]; hasName {
 						if toolName, ok := name.(string); ok {
-							// Check against configuration allowTools
-							if len(allowTools) > 0 {
-								if _, allow := allowTools[toolName]; !allow {
-									continue
-								}
+							// Check if tool is allowed
+							if _, allow := (*effectiveAllowTools)[toolName]; !allow {
+								continue
 							}
-
-							// Check against header allowTools
-							if len(allowToolsFromHeader) > 0 {
-								if _, allow := allowToolsFromHeader[toolName]; !allow {
-									continue
-								}
-							}
-
 							// Tool is allowed, add to filtered list
 							filteredTools = append(filteredTools, tool)
 						}

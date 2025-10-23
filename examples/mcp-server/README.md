@@ -47,6 +47,93 @@ description: MCP 服务器插件配置参考
 | ------------ | --------------- | -------- | ------ | -------------------------------------- |
 | `allowTools` | array of string | 选填     | -      | 允许调用的工具列表。如不指定，则允许所有工具 |
 
+#### 动态工具权限控制
+
+除了在配置中静态定义 `allowTools` 外，还支持通过 HTTP 请求头 `x-envoy-allow-mcp-tools` 动态控制工具访问权限。这使得前置插件（如认证、鉴权插件）可以根据用户身份或其他条件动态设置允许的工具列表。
+
+**Header 格式**：
+```
+x-envoy-allow-mcp-tools: tool1,tool2,tool3
+```
+
+**权限控制逻辑**：
+
+1. **配置级别 `allowTools`**（静态）：在插件配置中定义的基础工具白名单
+2. **Header 级别 `x-envoy-allow-mcp-tools`**（动态）：从请求头中读取的工具白名单
+3. **最终生效权限**：配置和 Header 中指定的工具列表的**交集**
+
+**Header 值的语义**：
+
+| Header 状态 | 行为 |
+|------------|------|
+| Header 不存在 | 没有额外限制，使用配置中的 `allowTools` |
+| Header 为空字符串 `""` | 没有额外限制，使用配置中的 `allowTools` |
+| Header 为空白字符串 `"  ,  ,  "` | 禁止访问所有工具（空集合） |
+| Header 有值 `"tool1,tool2"` | 与配置的 `allowTools` 取交集 |
+
+**使用场景示例**：
+
+1. **基于用户角色的权限控制**
+   ```yaml
+   # 配置中定义所有可用工具
+   allowTools:
+   - get-user-info
+   - update-user-info
+   - delete-user-info
+   - admin-operation
+   ```
+   
+   前置认证插件可以根据用户角色设置不同的工具权限：
+   - 普通用户：`x-envoy-allow-mcp-tools: get-user-info`
+   - 高级用户：`x-envoy-allow-mcp-tools: get-user-info,update-user-info`
+   - 管理员：不设置 header（允许所有配置中的工具）
+
+2. **多租户场景**
+   ```yaml
+   # 配置中定义租户可用的工具
+   allowTools:
+   - tenant-query-data
+   - tenant-update-data
+   - tenant-report
+   ```
+   
+   前置插件根据租户订阅套餐动态控制：
+   - 基础版：`x-envoy-allow-mcp-tools: tenant-query-data`
+   - 专业版：`x-envoy-allow-mcp-tools: tenant-query-data,tenant-update-data`
+   - 企业版：`x-envoy-allow-mcp-tools: tenant-query-data,tenant-update-data,tenant-report`
+
+3. **临时权限限制**
+   
+   在特殊情况下（如系统维护），前置插件可以临时限制某些工具的访问：
+   ```
+   x-envoy-allow-mcp-tools: read-only-tool1,read-only-tool2
+   ```
+
+**前置插件集成指南**：
+
+对于需要动态设置工具权限的前置插件（如认证、鉴权插件），**必须使用 `proxywasm.ReplaceHttpRequestHeader`** 来设置 `x-envoy-allow-mcp-tools` header：
+
+```go
+// 正确的方式：使用 ReplaceHttpRequestHeader
+// 这会覆盖用户可能传入的任何值，确保安全性
+proxywasm.ReplaceHttpRequestHeader("x-envoy-allow-mcp-tools", "tool1,tool2,tool3")
+
+// ❌ 错误的方式：使用 AddHttpRequestHeader
+// 这可能导致用户传入的值被保留，造成安全隐患
+proxywasm.AddHttpRequestHeader("x-envoy-allow-mcp-tools", "tool1,tool2,tool3")
+```
+
+使用 `ReplaceHttpRequestHeader` 可以确保：
+1. **安全性**：用户无法通过直接在请求中传入 `x-envoy-allow-mcp-tools` header 来绕过权限控制
+2. **可靠性**：前置插件设置的权限配置始终生效，不会被用户输入覆盖
+3. **可预测性**：MCP Server 插件接收到的始终是前置插件设置的权限值
+
+**注意事项**：
+- Header 值使用逗号分隔多个工具名称
+- 工具名称前后的空白字符会被自动去除
+- 当配置的 `allowTools` 为空数组时，无论 header 如何设置，都会禁止所有工具访问
+- MCP Server 插件会自动移除 `x-envoy-allow-mcp-tools` header，不会传递给后端服务
+
 ### REST-to-MCP 工具配置
 
 | 名称                          | 数据类型        | 填写要求 | 默认值 | 描述                           |

@@ -262,6 +262,61 @@ func (c *McpServerConfig) GetIsComposed() bool {
 	return c.isComposed
 }
 
+// computeEffectiveAllowTools computes the effective allowTools by taking the intersection
+// of config allowTools and request header allowTools.
+// Returns nil if no restrictions (allow all), otherwise returns a pointer to the effective set.
+func computeEffectiveAllowTools(configAllowTools *map[string]struct{}) *map[string]struct{} {
+	// Get allowTools from request header
+	allowToolsHeaderStr, _ := proxywasm.GetHttpRequestHeader("x-envoy-allow-mcp-tools")
+	proxywasm.RemoveHttpRequestHeader("x-envoy-allow-mcp-tools")
+	// Only consider header as "present" if it has non-empty value
+	// Empty string means header is not set or explicitly empty, both treated as "no restriction"
+	headerExists := allowToolsHeaderStr != ""
+	return computeEffectiveAllowToolsFromHeader(configAllowTools, allowToolsHeaderStr, headerExists)
+}
+
+// computeEffectiveAllowToolsFromHeader computes the effective allowTools by taking the intersection
+// of config allowTools and header allowTools string.
+// This is useful when the header string is already extracted (e.g., in async callbacks).
+// Returns nil if no restrictions (allow all), otherwise returns a pointer to the effective set.
+func computeEffectiveAllowToolsFromHeader(configAllowTools *map[string]struct{}, allowToolsHeaderStr string, headerExists bool) *map[string]struct{} {
+	var allowToolsFromHeader *map[string]struct{}
+	if headerExists {
+		// Header is present (even if empty string), parse it
+		headerMap := make(map[string]struct{})
+		for tool := range strings.SplitSeq(allowToolsHeaderStr, ",") {
+			trimmedTool := strings.TrimSpace(tool)
+			if trimmedTool == "" {
+				continue
+			}
+			headerMap[trimmedTool] = struct{}{}
+		}
+		// Always create pointer even if map is empty, to distinguish from "not configured"
+		allowToolsFromHeader = &headerMap
+	}
+
+	// Compute effective allowTools (intersection of config and header)
+	if configAllowTools == nil && allowToolsFromHeader == nil {
+		// Both not configured, allow all tools
+		return nil
+	} else if configAllowTools == nil {
+		// Only header restrictions
+		return allowToolsFromHeader
+	} else if allowToolsFromHeader == nil {
+		// Only config restrictions
+		return configAllowTools
+	} else {
+		// Both restrictions exist, compute intersection
+		intersection := make(map[string]struct{})
+		for tool := range *configAllowTools {
+			if _, exists := (*allowToolsFromHeader)[tool]; exists {
+				intersection[tool] = struct{}{}
+			}
+		}
+		return &intersection
+	}
+}
+
 // parseConfigCore contains the core config parsing logic with dependency injection
 func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *ConfigOptions) error {
 	toolSetJson := configJson.Get("toolSet")
@@ -403,11 +458,19 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 	}
 
 	// Parse allowTools - this might need adjustment for composed servers
-	allowToolsArray := configJson.Get("allowTools").Array()
-	allowTools := make(map[string]struct{}) // For single server, tool name. For composed, serverName/toolName.
-	for _, toolJson := range allowToolsArray {
-		allowTools[toolJson.String()] = struct{}{}
+	// Use pointer to distinguish between "not configured" (nil) and "configured as empty" (empty map)
+	var allowTools *map[string]struct{} // For single server, tool name. For composed, serverName/toolName.
+	allowToolsResult := configJson.Get("allowTools")
+	if allowToolsResult.Exists() {
+		// allowTools is configured, create the map
+		toolsMap := make(map[string]struct{})
+		allowToolsArray := allowToolsResult.Array()
+		for _, toolJson := range allowToolsArray {
+			toolsMap[toolJson.String()] = struct{}{}
+		}
+		allowTools = &toolsMap
 	}
+	// If allowTools is nil, it means not configured (allow all)
 
 	config.methodHandlers = make(utils.MethodHandlers)
 	// Use config.serverName which is now reliably set
@@ -467,27 +530,16 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 			var listedTools []map[string]any
 			// GetMCPTools() will return appropriately formatted tools for both single and composed servers
 			allTools := config.server.GetMCPTools() // For composed, keys are "serverName/toolName"
-			allowToolsHeaderStr, _ := proxywasm.GetHttpRequestHeader("x-envoy-allow-mcp-tools")
-			proxywasm.RemoveHttpRequestHeader("x-envoy-allow-mcp-tools")
-			allowToolsFromHeader := make(map[string]struct{})
-			for tool := range strings.SplitSeq(allowToolsHeaderStr, ",") {
-				trimmedTool := strings.TrimSpace(tool)
-				if trimmedTool == "" {
-					continue
-				}
-				allowToolsFromHeader[trimmedTool] = struct{}{}
-			}
+
+			// Compute effective allowTools using helper function
+			effectiveAllowTools := computeEffectiveAllowTools(allowTools)
+
 			for toolFullName, tool := range allTools {
 				// For composed server, toolFullName is "originalServerName/originalToolName"
 				// For single server, toolFullName is "originalToolName"
 				// The allowTools map should use the same format as toolFullName
-				if len(allowTools) != 0 {
-					if _, allow := allowTools[toolFullName]; !allow {
-						continue
-					}
-				}
-				if len(allowToolsFromHeader) != 0 {
-					if _, allow := allowToolsFromHeader[toolFullName]; !allow {
+				if effectiveAllowTools != nil {
+					if _, allow := (*effectiveAllowTools)[toolFullName]; !allow {
 						continue
 					}
 				}
@@ -528,8 +580,12 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 			toolName := params.Get("name").String() // For single server, this is the direct tool name
 			args := params.Get("arguments")
 
-			if len(allowTools) != 0 {
-				if _, allow := allowTools[toolName]; !allow {
+			// Compute effective allowTools using helper function
+			effectiveAllowTools := computeEffectiveAllowTools(allowTools)
+
+			// Check if tool is allowed
+			if effectiveAllowTools != nil {
+				if _, allow := (*effectiveAllowTools)[toolName]; !allow {
 					utils.OnMCPResponseError(ctx, fmt.Errorf("Tool not allowed: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:tools/call:tool_not_allowed", currentServerNameForHandlers))
 					return nil
 				}
