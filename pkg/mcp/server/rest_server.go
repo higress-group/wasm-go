@@ -258,6 +258,7 @@ type RestMCPServer struct {
 	securitySchemes           map[string]SecurityScheme
 	defaultDownstreamSecurity SecurityRequirement // Default client-to-gateway authentication
 	defaultUpstreamSecurity   SecurityRequirement // Default gateway-to-backend authentication
+	passthroughAuthHeader     bool                // If true, pass through Authorization header even without downstream security
 }
 
 // NewRestMCPServer creates a new REST-to-MCP server
@@ -302,6 +303,16 @@ func (s *RestMCPServer) SetDefaultUpstreamSecurity(security SecurityRequirement)
 // GetDefaultUpstreamSecurity gets the default upstream security configuration
 func (s *RestMCPServer) GetDefaultUpstreamSecurity() SecurityRequirement {
 	return s.defaultUpstreamSecurity
+}
+
+// SetPassthroughAuthHeader sets the passthrough auth header flag
+func (s *RestMCPServer) SetPassthroughAuthHeader(passthrough bool) {
+	s.passthroughAuthHeader = passthrough
+}
+
+// GetPassthroughAuthHeader gets the passthrough auth header flag
+func (s *RestMCPServer) GetPassthroughAuthHeader() bool {
+	return s.passthroughAuthHeader
 }
 
 // AddMCPTool implements Server interface
@@ -619,8 +630,11 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 
 	// Authorization or specific API key headers are handled by extractAndRemoveIncomingCredential if tool-level security is defined.
 	// If no tool-level security is defined, this generic RemoveHttpRequestHeader("Authorization") acts as a fallback.
+	// Unless passthroughAuthHeader is explicitly set to true.
 	if t.toolConfig.Security.ID == "" {
-		proxywasm.RemoveHttpRequestHeader("Authorization") // Remove if not handled by specific scheme
+		if !restServer.GetPassthroughAuthHeader() {
+			proxywasm.RemoveHttpRequestHeader("Authorization") // Remove if not handled by specific scheme
+		}
 	}
 	// General cleanup of Accept header from original client request.
 	proxywasm.RemoveHttpRequestHeader("Accept")

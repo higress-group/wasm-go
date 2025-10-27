@@ -736,6 +736,12 @@ func (m *McpSessionManagerImpl) CleanupExpiredSessions(maxAge time.Duration) {
 func CreateMcpProxyMethodHandlers(server *McpProxyServer, allowTools *map[string]struct{}) utils.MethodHandlers {
 	return utils.MethodHandlers{
 		"tools/list": func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
+			// Check transport type
+			if server.GetTransport() == TransportSSE {
+				return handleSSEToolsList(ctx, id, params, server, allowTools)
+			}
+
+			// StreamableHTTP transport (original logic)
 			// Extract cursor parameter if present
 			var cursor *string
 			if cursorResult := params.Get("cursor"); cursorResult.Exists() {
@@ -765,6 +771,12 @@ func CreateMcpProxyMethodHandlers(server *McpProxyServer, allowTools *map[string
 			return nil
 		},
 		"tools/call": func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
+			// Check transport type
+			if server.GetTransport() == TransportSSE {
+				return handleSSEToolsCall(ctx, id, params, server, allowTools)
+			}
+
+			// StreamableHTTP transport (original logic)
 			// Extract tool name and arguments
 			toolName := params.Get("name").String()
 			if toolName == "" {
@@ -924,4 +936,351 @@ func (h *McpProtocolHandler) applyProxyAuthentication(server *McpProxyServer, sc
 	}
 
 	return urlStr, nil
+}
+
+// handleSSEToolsList handles tools/list request for SSE transport
+func handleSSEToolsList(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result, server *McpProxyServer, allowTools *map[string]struct{}) error {
+	// Extract allowTools from header and compute effective allowTools
+	allowToolsHeaderStr, _ := proxywasm.GetHttpRequestHeader("x-envoy-allow-mcp-tools")
+	proxywasm.RemoveHttpRequestHeader("x-envoy-allow-mcp-tools")
+	headerExists := allowToolsHeaderStr != ""
+	effectiveAllowTools := computeEffectiveAllowToolsFromHeader(allowTools, allowToolsHeaderStr, headerExists)
+
+	// Store server reference, effective allowTools, and JSON-RPC ID in context
+	ctx.SetContext("mcp_proxy_server", server)
+	ctx.SetContext("mcp_proxy_effective_allow_tools", effectiveAllowTools)
+
+	// Prepare request body for tools/list
+	listRequest := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/list",
+		"params":  map[string]interface{}{},
+	}
+
+	if cursorResult := params.Get("cursor"); cursorResult.Exists() {
+		listRequest["params"].(map[string]interface{})["cursor"] = cursorResult.String()
+	}
+
+	requestBody, err := json.Marshal(listRequest)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tools/list request: %v", err)
+	}
+
+	// Use common function to handle SSE request
+	return handleSSERequest(ctx, id, requestBody, server, server.GetDefaultDownstreamSecurity(), server.GetDefaultUpstreamSecurity())
+}
+
+// handleSSEToolsCall handles tools/call request for SSE transport
+func handleSSEToolsCall(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result, server *McpProxyServer, allowTools *map[string]struct{}) error {
+	// Extract tool name and arguments
+	toolName := params.Get("name").String()
+	if toolName == "" {
+		return fmt.Errorf("missing tool name")
+	}
+
+	// Compute effective allowTools
+	effectiveAllowTools := computeEffectiveAllowTools(allowTools)
+
+	// Check if tool is allowed
+	if effectiveAllowTools != nil {
+		if _, allow := (*effectiveAllowTools)[toolName]; !allow {
+			utils.OnMCPResponseError(ctx, fmt.Errorf("Tool not allowed: %s", toolName), utils.ErrInvalidParams, fmt.Sprintf("mcp-proxy:%s:tools/call:tool_not_allowed", server.Name))
+			return nil
+		}
+	}
+
+	// Store server reference in context
+	ctx.SetContext("mcp_proxy_server", server)
+
+	// Extract arguments
+	arguments := make(map[string]interface{})
+	argsResult := params.Get("arguments")
+	if argsResult.Exists() {
+		if err := json.Unmarshal([]byte(argsResult.Raw), &arguments); err != nil {
+			return fmt.Errorf("invalid arguments: %v", err)
+		}
+	}
+
+	// Set properties for monitoring
+	proxywasm.SetProperty([]string{"mcp_server_name"}, []byte(server.Name))
+	proxywasm.SetProperty([]string{"mcp_tool_name"}, []byte(toolName))
+
+	log.Debugf("Tool call [%s] on server [%s] with arguments[%s]", toolName, server.Name, argsResult.Raw)
+
+	// Prepare request body for tools/call
+	// Use id: 2 because initialize uses id: 1, and we only send one tool request (list or call)
+	callRequest := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      toolName,
+			"arguments": arguments,
+		},
+	}
+
+	requestBody, err := json.Marshal(callRequest)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tools/call request: %v", err)
+	}
+
+	// Get tool config for tool-level security
+	toolConfig, _ := server.GetToolConfig(toolName)
+
+	// Determine downstream and upstream security (tool-level or server default)
+	var downstreamSecurity SecurityRequirement
+	if toolConfig.Security.ID != "" {
+		downstreamSecurity = toolConfig.Security
+	} else {
+		downstreamSecurity = server.GetDefaultDownstreamSecurity()
+	}
+
+	var upstreamSecurity SecurityRequirement
+	if toolConfig.RequestTemplate.Security.ID != "" {
+		upstreamSecurity = toolConfig.RequestTemplate.Security
+	} else {
+		upstreamSecurity = server.GetDefaultUpstreamSecurity()
+	}
+
+	// Use common function to handle SSE request
+	return handleSSERequest(ctx, id, requestBody, server, downstreamSecurity, upstreamSecurity)
+}
+
+// handleSSERequest is the common function to handle SSE requests for tools/list and tools/call
+func handleSSERequest(ctx wrapper.HttpContext, id utils.JsonRpcID, requestBody []byte, server *McpProxyServer, downstreamSecurity SecurityRequirement, upstreamSecurity SecurityRequirement) error {
+	// Store JSON-RPC ID in context
+	ctx.SetContext(CtxSSEProxyJsonRpcID, id)
+
+	// Store request body in context for later use
+	ctx.SetContext(CtxSSEProxyRequestBody, requestBody)
+
+	// Handle downstream security first (to extract and remove credentials before copying headers)
+	passthroughCredential := ""
+	if downstreamSecurity.ID != "" {
+		clientScheme, schemeOk := server.GetSecurityScheme(downstreamSecurity.ID)
+		if schemeOk {
+			extractedCred, err := ExtractAndRemoveIncomingCredential(clientScheme)
+			if err == nil && extractedCred != "" && downstreamSecurity.Passthrough {
+				passthroughCredential = extractedCred
+			}
+		}
+	} else {
+		// Fallback: Remove Authorization header if no downstream security is defined
+		// This prevents downstream credentials from being mistakenly passed to upstream
+		// Unless passthroughAuthHeader is explicitly set to true
+		if !server.GetPassthroughAuthHeader() {
+			proxywasm.RemoveHttpRequestHeader("Authorization")
+		}
+	}
+
+	// Copy original request headers AFTER removing downstream credentials
+	// These headers will be used for subsequent tools/list and tools/call POST requests
+	headers := copyHeadersForSSEPostRequest(ctx)
+
+	// Prepare authentication info
+	var authInfo *ProxyAuthInfo
+	if upstreamSecurity.ID != "" {
+		authInfo = &ProxyAuthInfo{
+			SecuritySchemeID:      upstreamSecurity.ID,
+			PassthroughCredential: passthroughCredential,
+			Server:                server,
+		}
+	}
+
+	// Store headers and auth info in context
+	ctx.SetContext(CtxSSEProxyHeaders, headers)
+	ctx.SetContext(CtxSSEProxyAuthInfo, authInfo)
+
+	// Convert current request to SSE GET request
+	// The request will continue through the filter chain and be routed to backend
+	// The response will be handled by onHttpResponseHeaders and onHttpStreamingResponseBody
+	err := initiateSSEChannelInRequestPhase(ctx, server, authInfo)
+	if err != nil {
+		log.Errorf("Failed to convert request to SSE GET: %v", err)
+		return err
+	}
+
+	// Explicitly set to NOT pause - let the request continue to establish SSE channel
+	ctx.SetContext(utils.CtxNeedPause, false)
+	return nil
+}
+
+// initiateSSEChannelInRequestPhase modifies the current request to be a GET request for establishing SSE channel
+func initiateSSEChannelInRequestPhase(ctx wrapper.HttpContext, server *McpProxyServer, authInfo *ProxyAuthInfo) error {
+	// Copy original request headers
+	getHeaders := copyAndCleanHeadersForSSE(ctx)
+
+	// Apply authentication to headers and URL
+	finalURL := server.GetMcpServerURL()
+	finalHeaders := getHeaders
+
+	if authInfo != nil && authInfo.SecuritySchemeID != "" {
+		modifiedURL, err := applyProxyAuthenticationForSSE(server, authInfo.SecuritySchemeID, authInfo.PassthroughCredential, &finalHeaders, finalURL)
+		if err != nil {
+			log.Errorf("Failed to apply authentication for SSE GET: %v", err)
+		} else {
+			finalURL = modifiedURL
+		}
+	}
+
+	// Parse the target URL
+	parsedURL, err := url.Parse(finalURL)
+	if err != nil {
+		return fmt.Errorf("failed to parse MCP server URL: %v", err)
+	}
+
+	// Store initial state
+	ctx.SetContext(CtxSSEProxyState, SSEStateWaitingEndpoint)
+
+	log.Infof("Converting request to SSE GET request for: %s", finalURL)
+
+	// Modify the current request to be a GET request
+	// Replace :method pseudo-header
+	if err := proxywasm.ReplaceHttpRequestHeader(":method", "GET"); err != nil {
+		log.Warnf("Failed to replace :method header: %v", err)
+	}
+
+	// Replace :path pseudo-header
+	path := parsedURL.Path
+	if parsedURL.RawQuery != "" {
+		path += "?" + parsedURL.RawQuery
+	}
+	if path == "" {
+		path = "/"
+	}
+	if err := proxywasm.ReplaceHttpRequestHeader(":path", path); err != nil {
+		log.Warnf("Failed to replace :path header: %v", err)
+	}
+
+	// Replace :authority pseudo-header (host:port or just host)
+	authority := parsedURL.Host
+	if authority == "" {
+		authority = parsedURL.Hostname()
+		if parsedURL.Port() != "" {
+			authority += ":" + parsedURL.Port()
+		}
+	}
+	if err := proxywasm.ReplaceHttpRequestHeader(":authority", authority); err != nil {
+		log.Warnf("Failed to replace :authority header: %v", err)
+	}
+
+	// Note: :scheme pseudo-header is managed by Envoy and should not be modified
+
+	// Remove headers that are not appropriate for GET requests
+	proxywasm.RemoveHttpRequestHeader("content-type")
+	proxywasm.RemoveHttpRequestHeader("content-length")
+	proxywasm.RemoveHttpRequestHeader("transfer-encoding")
+
+	// Set Accept header for SSE
+	if err := proxywasm.ReplaceHttpRequestHeader("accept", "text/event-stream"); err != nil {
+		log.Warnf("Failed to set Accept header: %v", err)
+	}
+
+	// Apply any additional headers from authentication
+	for _, header := range finalHeaders {
+		// Skip pseudo-headers and headers already set
+		headerName := strings.ToLower(header[0])
+		if strings.HasPrefix(headerName, ":") {
+			continue
+		}
+		if headerName == "accept" || headerName == "content-type" || headerName == "content-length" || headerName == "transfer-encoding" {
+			continue
+		}
+		if err := proxywasm.ReplaceHttpRequestHeader(header[0], header[1]); err != nil {
+			log.Warnf("Failed to set header %s: %v", header[0], err)
+		}
+	}
+
+	log.Debugf("SSE GET request prepared: %s %s (authority: %s)", "GET", path, authority)
+	return nil
+}
+
+// copyHeadersForSSEPostRequest copies original request headers for subsequent SSE POST requests (tools/list, tools/call)
+func copyHeadersForSSEPostRequest(ctx wrapper.HttpContext) [][2]string {
+	headers := make([][2]string, 0)
+
+	// Headers to skip for POST request
+	skipHeaders := map[string]bool{
+		"content-length":    true, // Will be set by the client
+		"transfer-encoding": true, // Will be set by the client
+		":path":             true, // Pseudo-header, not needed
+		":method":           true, // Pseudo-header, not needed
+		":scheme":           true, // Pseudo-header, not needed
+		":authority":        true, // Pseudo-header, not needed
+	}
+
+	// Get all request headers
+	headerMap, err := proxywasm.GetHttpRequestHeaders()
+	if err != nil {
+		log.Warnf("Failed to get request headers: %v", err)
+		// Return minimal headers with Content-Type
+		return [][2]string{{"Content-Type", "application/json"}}
+	}
+
+	// Copy headers, skipping unwanted ones
+	for _, header := range headerMap {
+		headerName := strings.ToLower(header[0])
+		if skipHeaders[headerName] {
+			continue
+		}
+		headers = append(headers, header)
+	}
+
+	// Ensure Content-Type is set to application/json
+	// (It might already be in the copied headers, but we ensure it's correct)
+	hasContentType := false
+	for i, header := range headers {
+		if strings.ToLower(header[0]) == "content-type" {
+			headers[i] = [2]string{"Content-Type", "application/json"}
+			hasContentType = true
+			break
+		}
+	}
+	if !hasContentType {
+		headers = append(headers, [2]string{"Content-Type", "application/json"})
+	}
+
+	log.Debugf("Prepared %d headers for SSE POST request", len(headers))
+	return headers
+}
+
+// copyAndCleanHeadersForSSE copies original request headers and cleans them for SSE GET request
+func copyAndCleanHeadersForSSE(ctx wrapper.HttpContext) [][2]string {
+	headers := make([][2]string, 0)
+
+	// Headers to skip for GET request
+	skipHeaders := map[string]bool{
+		"content-type":      true,
+		"content-length":    true,
+		"transfer-encoding": true,
+		"accept":            true, // Will be set explicitly for SSE
+		":path":             true,
+		":method":           true,
+		":scheme":           true,
+		":authority":        true,
+	}
+
+	// Get all request headers
+	headerMap, err := proxywasm.GetHttpRequestHeaders()
+	if err != nil {
+		log.Warnf("Failed to get request headers: %v", err)
+		// Return minimal headers with Accept
+		return [][2]string{{"Accept", "text/event-stream"}}
+	}
+
+	// Copy headers, skipping unwanted ones
+	for _, header := range headerMap {
+		headerName := strings.ToLower(header[0])
+		if skipHeaders[headerName] {
+			continue
+		}
+		headers = append(headers, header)
+	}
+
+	// Set/override Accept header for SSE
+	headers = append(headers, [2]string{"Accept", "text/event-stream"})
+
+	log.Debugf("Prepared %d headers for SSE GET request", len(headers))
+	return headers
 }

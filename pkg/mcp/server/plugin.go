@@ -72,6 +72,17 @@ func setupMcpProxyServer(serverName string, serverJson gjson.Result, serverConfi
 	proxyServer := NewMcpProxyServer(serverName)
 	proxyServer.SetConfig([]byte(serverConfigJsonForInstance))
 
+	// Parse and validate transport (required for mcp-proxy)
+	transportStr := serverJson.Get("transport").String()
+	if transportStr == "" {
+		return nil, errors.New("transport field is required for mcp-proxy server type")
+	}
+	transport := TransportProtocol(transportStr)
+	if transport != TransportHTTP && transport != TransportSSE {
+		return nil, fmt.Errorf("invalid transport value: %s, must be 'http' or 'sse'", transportStr)
+	}
+	proxyServer.SetTransport(transport)
+
 	// Parse and validate mcpServerURL (required for mcp-proxy)
 	mcpServerURL := serverJson.Get("mcpServerURL").String()
 	if mcpServerURL == "" {
@@ -87,6 +98,10 @@ func setupMcpProxyServer(serverName string, serverJson gjson.Result, serverConfi
 	if timeout > 0 {
 		proxyServer.SetTimeout(int(timeout))
 	}
+
+	// Parse passthroughAuthHeader (optional, defaults to false)
+	passthroughAuthHeader := serverJson.Get("passthroughAuthHeader").Bool()
+	proxyServer.SetPassthroughAuthHeader(passthroughAuthHeader)
 
 	// Parse security schemes
 	securitySchemesJson := serverJson.Get("securitySchemes")
@@ -420,6 +435,10 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 				restServer.SetDefaultUpstreamSecurity(defaultUpstreamSecurity)
 			}
 
+			// Parse passthroughAuthHeader (optional, defaults to false)
+			passthroughAuthHeader := serverJson.Get("passthroughAuthHeader").Bool()
+			restServer.SetPassthroughAuthHeader(passthroughAuthHeader)
+
 			for _, toolJson := range toolsJson.Array() {
 				var restTool RestTool
 				if err := json.Unmarshal([]byte(toolJson.Raw), &restTool); err != nil {
@@ -655,6 +674,8 @@ func Initialize() {
 		wrapper.WithLogger[McpServerConfig](&utils.MCPServerLog{}),
 		wrapper.ProcessRequestHeaders(onHttpRequestHeaders),
 		wrapper.ProcessRequestBody(onHttpRequestBody),
+		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
+		wrapper.ProcessStreamingResponseBody(onHttpStreamingResponseBody),
 	)
 }
 
@@ -740,4 +761,36 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config McpServerConfig, body []byte) types.Action {
 	return utils.HandleJsonRpcMethod(ctx, body, config.methodHandlers)
+}
+
+func onHttpResponseHeaders(ctx wrapper.HttpContext, config McpServerConfig) types.Action {
+	// Check if this request initiated SSE channel (tools/list or tools/call with SSE transport)
+	// Only these requests need special SSE streaming response processing
+	if ctx.GetContext(CtxSSEProxyState) != nil {
+		// Check if response has a body
+		if wrapper.HasResponseBody() {
+			// Pause streaming response for processing
+			// Content-type validation will be done in onHttpStreamingResponseBody
+			ctx.NeedPauseStreamingResponse()
+			return types.HeaderStopIteration
+		} else {
+			// No body, return error
+			utils.OnMCPResponseError(ctx, fmt.Errorf("no response body in SSE response"), utils.ErrInternalError, "mcp-proxy:sse:no_body")
+			return types.HeaderStopAllIterationAndWatermark
+		}
+	}
+
+	// For non-SSE streaming requests, continue normally
+	return types.HeaderContinue
+}
+
+func onHttpStreamingResponseBody(ctx wrapper.HttpContext, config McpServerConfig, data []byte, endOfStream bool) []byte {
+	// Check if this request initiated SSE channel (tools/list or tools/call with SSE transport)
+	// Only these requests need special SSE streaming response processing
+	if ctx.GetContext(CtxSSEProxyState) != nil {
+		return handleSSEStreamingResponse(ctx, config, data, endOfStream)
+	}
+
+	// For non-SSE streaming requests, return data as-is
+	return data
 }

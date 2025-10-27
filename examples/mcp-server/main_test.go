@@ -58,6 +58,7 @@ var mcpProxyServerConfig = func() json.RawMessage {
 		"server": map[string]interface{}{
 			"name":         "proxy-test-server",
 			"type":         "mcp-proxy",
+			"transport":    "http",
 			"mcpServerURL": "http://backend-mcp.example.com/mcp",
 			"timeout":      5000,
 		},
@@ -85,6 +86,7 @@ var mcpProxyServerWithAuthConfig = func() json.RawMessage {
 		"server": map[string]interface{}{
 			"name":         "proxy-auth-test-server",
 			"type":         "mcp-proxy",
+			"transport":    "http",
 			"mcpServerURL": "http://backend-mcp.example.com/mcp",
 			"timeout":      5000,
 			"defaultUpstreamSecurity": map[string]interface{}{
@@ -1558,6 +1560,7 @@ func TestMcpProxyServerAllowTools(t *testing.T) {
 			"server": map[string]interface{}{
 				"name":         "proxy-allow-tools-server",
 				"type":         "mcp-proxy",
+				"transport":    "http",
 				"mcpServerURL": "http://backend-mcp.example.com/mcp",
 				"timeout":      5000,
 			},

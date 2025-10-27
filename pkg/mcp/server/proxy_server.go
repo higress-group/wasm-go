@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
@@ -29,6 +30,14 @@ type McpProxyConfig struct {
 	// This structure is kept for any additional server configuration that may be needed in the future
 	// Currently, most configuration is handled as direct server fields
 }
+
+// TransportProtocol represents the transport protocol type for MCP proxy
+type TransportProtocol string
+
+const (
+	TransportHTTP TransportProtocol = "http" // StreamableHTTP protocol
+	TransportSSE  TransportProtocol = "sse"  // SSE protocol
+)
 
 // ToolArg represents an argument for a proxy tool
 type ToolArg struct {
@@ -65,6 +74,8 @@ type McpProxyServer struct {
 	defaultUpstreamSecurity   SecurityRequirement // Default gateway-to-backend authentication
 	mcpServerURL              string              // Backend MCP server URL
 	timeout                   int                 // Request timeout in milliseconds
+	transport                 TransportProtocol   // Transport protocol (http or sse)
+	passthroughAuthHeader     bool                // If true, pass through Authorization header even without downstream security
 }
 
 // NewMcpProxyServer creates a new MCP proxy server
@@ -131,6 +142,16 @@ func (s *McpProxyServer) GetTimeout() int {
 	return s.timeout
 }
 
+// SetTransport sets the transport protocol
+func (s *McpProxyServer) SetTransport(transport TransportProtocol) {
+	s.transport = transport
+}
+
+// GetTransport gets the transport protocol
+func (s *McpProxyServer) GetTransport() TransportProtocol {
+	return s.transport
+}
+
 // AddMCPTool implements Server interface
 func (s *McpProxyServer) AddMCPTool(name string, tool Tool) Server {
 	s.base.AddMCPTool(name, tool)
@@ -189,6 +210,16 @@ func (s *McpProxyServer) GetToolConfig(name string) (McpProxyToolConfig, bool) {
 	return config, ok
 }
 
+// SetPassthroughAuthHeader sets the passthrough auth header flag
+func (s *McpProxyServer) SetPassthroughAuthHeader(passthrough bool) {
+	s.passthroughAuthHeader = passthrough
+}
+
+// GetPassthroughAuthHeader gets the passthrough auth header flag
+func (s *McpProxyServer) GetPassthroughAuthHeader() bool {
+	return s.passthroughAuthHeader
+}
+
 // ForwardToolsList forwards tools/list request to backend MCP server
 func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error {
 	wrapperCtx := ctx.(wrapper.HttpContext)
@@ -215,6 +246,13 @@ func (s *McpProxyServer) ForwardToolsList(ctx HttpContext, cursor *string) error
 				passthroughCredential = extractedCred
 				log.Debugf("Passthrough credential set for tools/list request.")
 			}
+		}
+	} else {
+		// Fallback: Remove Authorization header if no downstream security is defined
+		// This prevents downstream credentials from being mistakenly passed to upstream
+		// Unless passthroughAuthHeader is explicitly set to true
+		if !s.GetPassthroughAuthHeader() {
+			proxywasm.RemoveHttpRequestHeader("Authorization")
 		}
 	}
 
@@ -304,6 +342,13 @@ func (t *McpProxyTool) Call(httpCtx HttpContext, server Server) error {
 				passthroughCredential = extractedCred
 				log.Debugf("Passthrough credential set for tool %s.", t.name)
 			}
+		}
+	} else {
+		// Fallback: Remove Authorization header if no downstream security is defined
+		// This prevents downstream credentials from being mistakenly passed to upstream
+		// Unless passthroughAuthHeader is explicitly set to true
+		if !proxyServer.GetPassthroughAuthHeader() {
+			proxywasm.RemoveHttpRequestHeader("Authorization")
 		}
 	}
 
