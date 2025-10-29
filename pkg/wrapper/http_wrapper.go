@@ -102,6 +102,9 @@ func HttpCall(cluster Cluster, method, rawURL string, headers [][2]string, body 
 	if parsedURL.Host != "" {
 		authority = parsedURL.Host
 	}
+	if authority == "" {
+		authority = "unknownhost"
+	}
 	path := "/" + strings.TrimPrefix(parsedURL.Path, "/")
 	if parsedURL.RawQuery != "" {
 		path = fmt.Sprintf("%s?%s", path, parsedURL.RawQuery)

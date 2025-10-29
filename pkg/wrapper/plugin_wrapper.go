@@ -668,21 +668,36 @@ func (ctx *CommonPluginCtx[PluginConfig]) NewHttpContext(contextID uint32) types
 
 type CommonHttpCtx[PluginConfig any] struct {
 	types.DefaultHttpContext
-	plugin                 *CommonPluginCtx[PluginConfig]
-	config                 *PluginConfig
-	needRequestBody        bool
-	needResponseBody       bool
-	streamingRequestBody   bool
-	streamingResponseBody  bool
-	pauseStreamingResponse bool
-	requestBodySize        int
-	responseBodySize       int
-	contextID              uint32
-	userContext            map[string]interface{}
-	userAttribute          map[string]interface{}
-	bufferQueue            [][]byte
-	responseCallback       iface.RouteResponseCallback
-	executionPhase         iface.HTTPExecutionPhase
+	plugin                    *CommonPluginCtx[PluginConfig]
+	config                    *PluginConfig
+	needRequestBody           bool
+	needResponseBody          bool
+	streamingRequestBody      bool
+	streamingResponseBody     bool
+	pauseStreamingResponse    bool
+	requestBodySize           int
+	responseBodySize          int
+	contextID                 uint32
+	userContext               map[string]interface{}
+	userAttribute             map[string]interface{}
+	bufferQueue               [][]byte
+	responseCallback          iface.RouteResponseCallback
+	executionPhase            iface.HTTPExecutionPhase
+	requestHeaderEndOfStream  bool
+	responseHeaderEndOfStream bool
+	// Cached request pseudo-headers from the header phase
+	scheme string
+	host   string
+	path   string
+	method string
+	// Cached request headers from the header phase
+	requestConnection      string
+	requestUpgrade         string
+	requestContentType     string
+	requestContentEncoding string
+	// Cached response headers from the header phase
+	responseContentType     string
+	responseContentEncoding string
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) GetExecutionPhase() iface.HTTPExecutionPhase {
@@ -799,23 +814,19 @@ func (ctx *CommonHttpCtx[PluginConfig]) GetMatchConfig() (*PluginConfig, error) 
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) Scheme() string {
-	proxywasm.SetEffectiveContext(ctx.contextID)
-	return GetRequestScheme()
+	return ctx.scheme
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) Host() string {
-	proxywasm.SetEffectiveContext(ctx.contextID)
-	return GetRequestHost()
+	return ctx.host
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) Path() string {
-	proxywasm.SetEffectiveContext(ctx.contextID)
-	return GetRequestPath()
+	return ctx.path
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) Method() string {
-	proxywasm.SetEffectiveContext(ctx.contextID)
-	return GetRequestMethod()
+	return ctx.method
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) DontReadRequestBody() {
@@ -869,9 +880,64 @@ func (ctx *CommonHttpCtx[PluginConfig]) SetResponseBodyBufferLimit(size uint32) 
 	_ = proxywasm.SetProperty([]string{"set_encoder_buffer_limit"}, []byte(strconv.Itoa(int(size))))
 }
 
+// HasRequestBody checks if the request has a body.
+// It directly checks whether endOfStream was received during OnHttpRequestHeaders.
+// If endOfStream was true in the header phase, there's no body; otherwise there is a body.
+func (ctx *CommonHttpCtx[PluginConfig]) HasRequestBody() bool {
+	return !ctx.requestHeaderEndOfStream
+}
+
+// HasResponseBody checks if the response has a body.
+// It directly checks whether endOfStream was received during OnHttpResponseHeaders.
+// If endOfStream was true in the header phase, there's no body; otherwise there is a body.
+func (ctx *CommonHttpCtx[PluginConfig]) HasResponseBody() bool {
+	return !ctx.responseHeaderEndOfStream
+}
+
+// IsWebsocket checks if the request is a WebSocket upgrade request.
+// It uses cached header values from the header phase and can be called at any time.
+func (ctx *CommonHttpCtx[PluginConfig]) IsWebsocket() bool {
+	return strings.EqualFold(ctx.requestConnection, "upgrade") && strings.EqualFold(ctx.requestUpgrade, "websocket")
+}
+
+// IsBinaryRequestBody checks if the request body is binary content.
+// It uses cached header values from the header phase and can be called at any time.
+func (ctx *CommonHttpCtx[PluginConfig]) IsBinaryRequestBody() bool {
+	if strings.Contains(ctx.requestContentType, "octet-stream") ||
+		strings.Contains(ctx.requestContentType, "grpc") {
+		return true
+	}
+	return ctx.requestContentEncoding != ""
+}
+
+// IsBinaryResponseBody checks if the response body is binary content.
+// It uses cached header values from the header phase and can be called at any time.
+func (ctx *CommonHttpCtx[PluginConfig]) IsBinaryResponseBody() bool {
+	if strings.Contains(ctx.responseContentType, "octet-stream") ||
+		strings.Contains(ctx.responseContentType, "grpc") {
+		return true
+	}
+	return ctx.responseContentEncoding != ""
+}
+
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, endOfStream bool) types.Action {
 	defer recoverFunc()
 	ctx.executionPhase = iface.DecodeHeader
+	// Track if endOfStream was received in the header phase
+	ctx.requestHeaderEndOfStream = endOfStream
+
+	// Cache request pseudo-headers for later access outside of header phase
+	ctx.scheme, _ = proxywasm.GetHttpRequestHeader(":scheme")
+	ctx.host, _ = proxywasm.GetHttpRequestHeader(":authority")
+	ctx.path, _ = proxywasm.GetHttpRequestHeader(":path")
+	ctx.method, _ = proxywasm.GetHttpRequestHeader(":method")
+
+	// Cache request headers for later access outside of header phase
+	ctx.requestConnection, _ = proxywasm.GetHttpRequestHeader("connection")
+	ctx.requestUpgrade, _ = proxywasm.GetHttpRequestHeader("upgrade")
+	ctx.requestContentType, _ = proxywasm.GetHttpRequestHeader("content-type")
+	ctx.requestContentEncoding, _ = proxywasm.GetHttpRequestHeader("content-encoding")
+
 	requestID, _ := proxywasm.GetHttpRequestHeader("x-request-id")
 	_ = proxywasm.SetProperty([]string{"x_request_id"}, []byte(requestID))
 
@@ -879,8 +945,9 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 	if ctx.plugin.vm.rebuildAfterRequests > 0 {
 		ctx.plugin.vm.requestCount++
 		if ctx.plugin.vm.requestCount >= ctx.plugin.vm.rebuildAfterRequests {
-			proxywasm.SetProperty([]string{"wasm_rebuild"}, []byte("true"))
-			ctx.plugin.vm.log.Infof("Plugin reached rebuild threshold after %d requests, rebuild flag set", ctx.plugin.vm.requestCount)
+			proxywasm.SetProperty([]string{"wasm_need_rebuild"}, []byte("true"))
+			ctx.plugin.vm.log.Debugf("Plugin reached rebuild threshold after %d requests, rebuild flag set", ctx.plugin.vm.requestCount)
+			ctx.plugin.vm.requestCount = 0
 		}
 	}
 
@@ -894,10 +961,10 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 	}
 	ctx.config = config
 	// To avoid unexpected operations, plugins do not read the binary content body
-	if IsBinaryRequestBody() {
+	if ctx.IsBinaryRequestBody() {
 		ctx.needRequestBody = false
 	}
-	if IsWebsocket() {
+	if ctx.IsWebsocket() {
 		ctx.needRequestBody = false
 		ctx.needResponseBody = false
 	}
@@ -944,11 +1011,18 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseHeaders(numHeaders int, endOfStream bool) types.Action {
 	defer recoverFunc()
 	ctx.executionPhase = iface.EncodeHeader
+	// Track if endOfStream was received in the header phase
+	ctx.responseHeaderEndOfStream = endOfStream
+
+	// Cache response headers for later access outside of header phase
+	ctx.responseContentType, _ = proxywasm.GetHttpResponseHeader("content-type")
+	ctx.responseContentEncoding, _ = proxywasm.GetHttpResponseHeader("content-encoding")
+
 	if ctx.config == nil {
 		return types.ActionContinue
 	}
 	// To avoid unexpected operations, plugins do not read the binary content body
-	if IsBinaryResponseBody() {
+	if ctx.IsBinaryResponseBody() {
 		ctx.needResponseBody = false
 	}
 	if ctx.responseCallback != nil {
