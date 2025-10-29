@@ -98,4 +98,21 @@ type HttpContext interface {
 	RouteCall(method, url string, headers [][2]string, body []byte, callback RouteResponseCallback) error
 	// Get the execution phase of the current plugin
 	GetExecutionPhase() HTTPExecutionPhase
+	// Check if the request has a body.
+	// It directly checks whether endOfStream was received during OnHttpRequestHeaders.
+	// If endOfStream was true in the header phase, there's no body; otherwise there is a body.
+	HasRequestBody() bool
+	// Check if the response has a body.
+	// It directly checks whether endOfStream was received during OnHttpResponseHeaders.
+	// If endOfStream was true in the header phase, there's no body; otherwise there is a body.
+	HasResponseBody() bool
+	// Check if the request is a WebSocket upgrade request.
+	// This method uses cached header values from the header phase and can be called at any time.
+	IsWebsocket() bool
+	// Check if the request body is binary content.
+	// This method uses cached header values from the header phase and can be called at any time.
+	IsBinaryRequestBody() bool
+	// Check if the response body is binary content.
+	// This method uses cached header values from the header phase and can be called at any time.
+	IsBinaryResponseBody() bool
 }
