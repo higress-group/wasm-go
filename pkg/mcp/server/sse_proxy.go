@@ -36,7 +36,6 @@ const (
 	CtxSSEProxyState       = "sse_proxy_state"
 	CtxSSEProxyEndpointURL = "sse_proxy_endpoint_url"
 	CtxSSEProxyBuffer      = "sse_proxy_buffer"
-	CtxSSEProxyHeaders     = "sse_proxy_headers"
 	CtxSSEProxyAuthInfo    = "sse_proxy_auth_info"
 	CtxSSEProxyRequestBody = "sse_proxy_request_body"
 	CtxSSEProxyRequestID   = "sse_proxy_request_id"
@@ -218,7 +217,7 @@ func ExtractEndpointURL(endpointData string, baseURL string) (string, error) {
 }
 
 // sendSSEInitialize sends the initialize request for SSE protocol
-func sendSSEInitialize(ctx wrapper.HttpContext, endpointURL string, headers [][2]string, authInfo *ProxyAuthInfo, proxyServer *McpProxyServer) error {
+func sendSSEInitialize(ctx wrapper.HttpContext, endpointURL string, authInfo *ProxyAuthInfo, proxyServer *McpProxyServer) error {
 	initRequest := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -245,11 +244,14 @@ func sendSSEInitialize(ctx wrapper.HttpContext, endpointURL string, headers [][2
 		return fmt.Errorf("failed to marshal initialize request: %v", err)
 	}
 
+	// Copy headers from current request (now supported in response phase by Envoy)
+	finalHeaders := copyHeadersForSSERequest(ctx)
+
+	// Override required headers for SSE initialize
+	ensureHeader(&finalHeaders, "Content-Type", "application/json")
+
 	// Apply authentication to headers and URL
 	finalURL := endpointURL
-	finalHeaders := make([][2]string, len(headers))
-	copy(finalHeaders, headers)
-
 	if authInfo != nil && authInfo.SecuritySchemeID != "" {
 		modifiedURL, err := applyProxyAuthenticationForSSE(proxyServer, authInfo.SecuritySchemeID, authInfo.PassthroughCredential, &finalHeaders, endpointURL)
 		if err != nil {
@@ -285,7 +287,7 @@ func sendSSEInitialize(ctx wrapper.HttpContext, endpointURL string, headers [][2
 }
 
 // sendSSENotification sends the notifications/initialized message for SSE protocol
-func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, headers [][2]string, authInfo *ProxyAuthInfo, proxyServer *McpProxyServer) error {
+func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, authInfo *ProxyAuthInfo, proxyServer *McpProxyServer) error {
 	notification := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"method":  "notifications/initialized",
@@ -296,11 +298,14 @@ func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, headers []
 		return fmt.Errorf("failed to marshal notification: %v", err)
 	}
 
+	// Copy headers from current request (now supported in response phase by Envoy)
+	finalHeaders := copyHeadersForSSERequest(ctx)
+
+	// Override required headers for SSE notification
+	ensureHeader(&finalHeaders, "Content-Type", "application/json")
+
 	// Apply authentication to headers and URL
 	finalURL := endpointURL
-	finalHeaders := make([][2]string, len(headers))
-	copy(finalHeaders, headers)
-
 	if authInfo != nil && authInfo.SecuritySchemeID != "" {
 		modifiedURL, err := applyProxyAuthenticationForSSE(proxyServer, authInfo.SecuritySchemeID, authInfo.PassthroughCredential, &finalHeaders, endpointURL)
 		if err != nil {
@@ -332,7 +337,6 @@ func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, headers []
 		// Now we can send the actual tool request
 		// Get stored context
 		endpointURLRaw := ctx.GetContext(CtxSSEProxyEndpointURL)
-		headersRaw := ctx.GetContext(CtxSSEProxyHeaders)
 		authInfoRaw := ctx.GetContext(CtxSSEProxyAuthInfo)
 		proxyServerRaw := ctx.GetContext("mcp_proxy_server")
 		requestBodyRaw := ctx.GetContext(CtxSSEProxyRequestBody)
@@ -347,11 +351,6 @@ func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, headers []
 		proxyServer := proxyServerRaw.(*McpProxyServer)
 		requestBody := requestBodyRaw.([]byte)
 
-		var headers [][2]string
-		if headersRaw != nil {
-			headers = headersRaw.([][2]string)
-		}
-
 		var authInfo *ProxyAuthInfo
 		if authInfoRaw != nil {
 			authInfo = authInfoRaw.(*ProxyAuthInfo)
@@ -359,7 +358,7 @@ func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, headers []
 
 		// Parse to get request ID
 		reqID := gjson.GetBytes(requestBody, "id").Int()
-		if err := sendSSEToolRequest(ctx, endpointURL, headers, authInfo, proxyServer, requestBody, int(reqID)); err != nil {
+		if err := sendSSEToolRequest(ctx, endpointURL, authInfo, proxyServer, requestBody, int(reqID)); err != nil {
 			log.Errorf("Failed to send SSE tool request: %v", err)
 			injectSSEResponseError(ctx, err, utils.ErrInternalError)
 		}
@@ -367,12 +366,15 @@ func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, headers []
 }
 
 // sendSSEToolRequest sends the tools/list or tools/call request for SSE protocol
-func sendSSEToolRequest(ctx wrapper.HttpContext, endpointURL string, headers [][2]string, authInfo *ProxyAuthInfo, proxyServer *McpProxyServer, requestBody []byte, requestID int) error {
+func sendSSEToolRequest(ctx wrapper.HttpContext, endpointURL string, authInfo *ProxyAuthInfo, proxyServer *McpProxyServer, requestBody []byte, requestID int) error {
+	// Copy headers from current request (now supported in response phase by Envoy)
+	finalHeaders := copyHeadersForSSERequest(ctx)
+
+	// Override required headers for SSE tool request
+	ensureHeader(&finalHeaders, "Content-Type", "application/json")
+
 	// Apply authentication to headers and URL
 	finalURL := endpointURL
-	finalHeaders := make([][2]string, len(headers))
-	copy(finalHeaders, headers)
-
 	if authInfo != nil && authInfo.SecuritySchemeID != "" {
 		modifiedURL, err := applyProxyAuthenticationForSSE(proxyServer, authInfo.SecuritySchemeID, authInfo.PassthroughCredential, &finalHeaders, endpointURL)
 		if err != nil {
@@ -403,6 +405,43 @@ func sendSSEToolRequest(ctx wrapper.HttpContext, endpointURL string, headers [][
 		log.Debugf("SSE tool request sent successfully")
 		// The response will be received through SSE channel and processed in streaming response handler
 	}, timeout)
+}
+
+// copyHeadersForSSERequest copies headers from current request for SSE RouteCluster calls
+// This leverages Envoy's new capability to access request headers in response phase
+func copyHeadersForSSERequest(ctx wrapper.HttpContext) [][2]string {
+	headers := make([][2]string, 0)
+
+	// Headers to skip
+	skipHeaders := map[string]bool{
+		"content-length":    true, // Will be set by the client
+		"transfer-encoding": true, // Will be set by the client
+		"accept":            true, // Will be set explicitly for SSE requests
+		":path":             true, // Pseudo-header, not needed
+		":method":           true, // Pseudo-header, not needed
+		":scheme":           true, // Pseudo-header, not needed
+		":authority":        true, // Pseudo-header, not needed
+	}
+
+	// Get all request headers (now supported in response phase by Envoy)
+	headerMap, err := proxywasm.GetHttpRequestHeaders()
+	if err != nil {
+		log.Warnf("Failed to get request headers in response phase: %v", err)
+		// Return minimal headers
+		return [][2]string{}
+	}
+
+	// Copy headers, skipping unwanted ones
+	for _, header := range headerMap {
+		headerName := strings.ToLower(header[0])
+		if skipHeaders[headerName] {
+			continue
+		}
+		headers = append(headers, header)
+	}
+
+	log.Debugf("Copied %d headers from request in response phase for SSE", len(headers))
+	return headers
 }
 
 // applyProxyAuthenticationForSSE applies authentication for SSE proxy requests
@@ -571,14 +610,8 @@ func handleWaitingEndpoint(ctx wrapper.HttpContext, config McpServerConfig, buff
 			log.Infof("Received SSE endpoint URL: %s", endpointURL)
 			ctx.SetContext(CtxSSEProxyEndpointURL, endpointURL)
 
-			// Get stored headers and auth info
-			headersRaw := ctx.GetContext(CtxSSEProxyHeaders)
+			// Get stored auth info
 			authInfoRaw := ctx.GetContext(CtxSSEProxyAuthInfo)
-
-			var headers [][2]string
-			if headersRaw != nil {
-				headers = headersRaw.([][2]string)
-			}
 
 			var authInfo *ProxyAuthInfo
 			if authInfoRaw != nil {
@@ -586,7 +619,7 @@ func handleWaitingEndpoint(ctx wrapper.HttpContext, config McpServerConfig, buff
 			}
 
 			// Send initialize request
-			if err := sendSSEInitialize(ctx, endpointURL, headers, authInfo, proxyServer); err != nil {
+			if err := sendSSEInitialize(ctx, endpointURL, authInfo, proxyServer); err != nil {
 				log.Errorf("Failed to send SSE initialize: %v", err)
 				injectSSEResponseError(ctx, err, utils.ErrInternalError)
 				return []byte{}
@@ -659,16 +692,10 @@ func handleWaitingInitResp(ctx wrapper.HttpContext, config McpServerConfig, buff
 
 					log.Debugf("Received initialize response, sending notification")
 
-					// Get endpoint URL and headers
+					// Get endpoint URL and auth info
 					endpointURL := ctx.GetContext(CtxSSEProxyEndpointURL).(string)
-					headersRaw := ctx.GetContext(CtxSSEProxyHeaders)
 					authInfoRaw := ctx.GetContext(CtxSSEProxyAuthInfo)
 					proxyServerRaw := ctx.GetContext("mcp_proxy_server")
-
-					var headers [][2]string
-					if headersRaw != nil {
-						headers = headersRaw.([][2]string)
-					}
 
 					var authInfo *ProxyAuthInfo
 					if authInfoRaw != nil {
@@ -679,7 +706,7 @@ func handleWaitingInitResp(ctx wrapper.HttpContext, config McpServerConfig, buff
 
 					// Send notification
 					// The notification callback will send the tool request after notification succeeds
-					if err := sendSSENotification(ctx, endpointURL, headers, authInfo, proxyServer); err != nil {
+					if err := sendSSENotification(ctx, endpointURL, authInfo, proxyServer); err != nil {
 						log.Errorf("Failed to send SSE notification: %v", err)
 						injectSSEResponseError(ctx, err, utils.ErrInternalError)
 						return []byte{}

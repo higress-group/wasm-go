@@ -1076,10 +1076,6 @@ func handleSSERequest(ctx wrapper.HttpContext, id utils.JsonRpcID, requestBody [
 		}
 	}
 
-	// Copy original request headers AFTER removing downstream credentials
-	// These headers will be used for subsequent tools/list and tools/call POST requests
-	headers := copyHeadersForSSEPostRequest(ctx)
-
 	// Prepare authentication info
 	var authInfo *ProxyAuthInfo
 	if upstreamSecurity.ID != "" {
@@ -1090,8 +1086,7 @@ func handleSSERequest(ctx wrapper.HttpContext, id utils.JsonRpcID, requestBody [
 		}
 	}
 
-	// Store headers and auth info in context
-	ctx.SetContext(CtxSSEProxyHeaders, headers)
+	// Store auth info in context (headers will be copied directly in response phase)
 	ctx.SetContext(CtxSSEProxyAuthInfo, authInfo)
 
 	// Convert current request to SSE GET request
@@ -1246,55 +1241,6 @@ func ensureHeader(headers *[][2]string, key, value string) {
 	}
 	// Header doesn't exist, add it
 	*headers = append(*headers, [2]string{key, value})
-}
-
-// copyHeadersForSSEPostRequest copies original request headers for subsequent SSE POST requests (tools/list, tools/call)
-func copyHeadersForSSEPostRequest(ctx wrapper.HttpContext) [][2]string {
-	headers := make([][2]string, 0)
-
-	// Headers to skip for POST request
-	skipHeaders := map[string]bool{
-		"content-length":    true, // Will be set by the client
-		"transfer-encoding": true, // Will be set by the client
-		":path":             true, // Pseudo-header, not needed
-		":method":           true, // Pseudo-header, not needed
-		":scheme":           true, // Pseudo-header, not needed
-		":authority":        true, // Pseudo-header, not needed
-	}
-
-	// Get all request headers
-	headerMap, err := proxywasm.GetHttpRequestHeaders()
-	if err != nil {
-		log.Warnf("Failed to get request headers: %v", err)
-		// Return minimal headers with Content-Type
-		return [][2]string{{"Content-Type", "application/json"}}
-	}
-
-	// Copy headers, skipping unwanted ones
-	for _, header := range headerMap {
-		headerName := strings.ToLower(header[0])
-		if skipHeaders[headerName] {
-			continue
-		}
-		headers = append(headers, header)
-	}
-
-	// Ensure Content-Type is set to application/json
-	// (It might already be in the copied headers, but we ensure it's correct)
-	hasContentType := false
-	for i, header := range headers {
-		if strings.ToLower(header[0]) == "content-type" {
-			headers[i] = [2]string{"Content-Type", "application/json"}
-			hasContentType = true
-			break
-		}
-	}
-	if !hasContentType {
-		headers = append(headers, [2]string{"Content-Type", "application/json"})
-	}
-
-	log.Debugf("Prepared %d headers for SSE POST request", len(headers))
-	return headers
 }
 
 // copyAndCleanHeadersForSSE copies original request headers and cleans them for SSE GET request
