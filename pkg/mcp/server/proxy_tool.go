@@ -459,14 +459,16 @@ func (h *McpProtocolHandler) executeToolsCall(ctx wrapper.HttpContext) error {
 
 // sendMcpRequest sends an MCP request to the backend server using POST method
 func (h *McpProtocolHandler) sendMcpRequest(ctx wrapper.HttpContext, body []byte, authInfo *ProxyAuthInfo, callback func(int, [][2]string, []byte)) error {
-	headers := [][2]string{
-		{"Content-Type", "application/json"},
-		{"Accept", "application/json,text/event-stream"},
-	}
+	// Copy headers from current request
+	headers := copyHeadersForStreamableHTTP(ctx)
+
+	// Override/ensure required headers for MCP request
+	ensureHeader(&headers, "Content-Type", "application/json")
+	ensureHeader(&headers, "Accept", "application/json,text/event-stream")
 
 	// Add session ID if we have one
 	if h.sessionID != "" {
-		headers = append(headers, [2]string{"Mcp-Session-Id", h.sessionID})
+		ensureHeader(&headers, "Mcp-Session-Id", h.sessionID)
 	}
 
 	// Start with the original backend URL
@@ -1194,6 +1196,56 @@ func initiateSSEChannelInRequestPhase(ctx wrapper.HttpContext, server *McpProxyS
 
 	log.Debugf("SSE GET request prepared: %s %s (authority: %s)", "GET", path, authority)
 	return nil
+}
+
+// copyHeadersForStreamableHTTP copies headers from current request for StreamableHTTP requests
+// This is used for initialize/notification requests in non-SSE mode
+func copyHeadersForStreamableHTTP(ctx wrapper.HttpContext) [][2]string {
+	headers := make([][2]string, 0)
+
+	// Headers to skip
+	skipHeaders := map[string]bool{
+		"content-length":    true, // Will be set by the client
+		"transfer-encoding": true, // Will be set by the client
+		":path":             true, // Pseudo-header, not needed
+		":method":           true, // Pseudo-header, not needed
+		":scheme":           true, // Pseudo-header, not needed
+		":authority":        true, // Pseudo-header, not needed
+	}
+
+	// Get all request headers
+	headerMap, err := proxywasm.GetHttpRequestHeaders()
+	if err != nil {
+		log.Warnf("Failed to get request headers: %v", err)
+		// Return minimal headers
+		return [][2]string{}
+	}
+
+	// Copy headers, skipping unwanted ones
+	for _, header := range headerMap {
+		headerName := strings.ToLower(header[0])
+		if skipHeaders[headerName] {
+			continue
+		}
+		headers = append(headers, header)
+	}
+
+	return headers
+}
+
+// ensureHeader ensures a header is set to a specific value, replacing if it exists
+func ensureHeader(headers *[][2]string, key, value string) {
+	keyLower := strings.ToLower(key)
+	// Check if header already exists
+	for i, h := range *headers {
+		if strings.ToLower(h[0]) == keyLower {
+			// Replace existing header
+			(*headers)[i] = [2]string{key, value}
+			return
+		}
+	}
+	// Header doesn't exist, add it
+	*headers = append(*headers, [2]string{key, value})
 }
 
 // copyHeadersForSSEPostRequest copies original request headers for subsequent SSE POST requests (tools/list, tools/call)
