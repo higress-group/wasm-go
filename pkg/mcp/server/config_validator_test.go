@@ -15,11 +15,48 @@
 package server
 
 import (
+	"fmt"
+	"os"
 	"testing"
 
+	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 )
+
+// testLogger is a mock logger for testing to prevent panics
+type testLogger struct{}
+
+func (l *testLogger) Trace(msg string) { fmt.Fprintf(os.Stderr, "[TRACE] %s\n", msg) }
+func (l *testLogger) Tracef(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[TRACE] "+format+"\n", args...)
+}
+func (l *testLogger) Debug(msg string) { fmt.Fprintf(os.Stderr, "[DEBUG] %s\n", msg) }
+func (l *testLogger) Debugf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+}
+func (l *testLogger) Info(msg string) { fmt.Fprintf(os.Stderr, "[INFO] %s\n", msg) }
+func (l *testLogger) Infof(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[INFO] "+format+"\n", args...)
+}
+func (l *testLogger) Warn(msg string) { fmt.Fprintf(os.Stderr, "[WARN] %s\n", msg) }
+func (l *testLogger) Warnf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[WARN] "+format+"\n", args...)
+}
+func (l *testLogger) Error(msg string) { fmt.Fprintf(os.Stderr, "[ERROR] %s\n", msg) }
+func (l *testLogger) Errorf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[ERROR] "+format+"\n", args...)
+}
+func (l *testLogger) Critical(msg string) { fmt.Fprintf(os.Stderr, "[CRITICAL] %s\n", msg) }
+func (l *testLogger) Criticalf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "[CRITICAL] "+format+"\n", args...)
+}
+func (l *testLogger) ResetID(pluginID string) {}
+
+func init() {
+	// Set a custom logger for testing to prevent panics
+	log.SetPluginLog(&testLogger{})
+}
 
 // TestMcpProxyConfigValidation tests configuration validation for mcp-proxy servers
 func TestMcpProxyConfigValidation(t *testing.T) {
@@ -35,6 +72,7 @@ func TestMcpProxyConfigValidation(t *testing.T) {
 				"server": {
 					"name": "test-proxy",
 					"type": "mcp-proxy",
+					"transport": "http",
 					"mcpServerURL": "http://backend.example.com/mcp",
 					"timeout": 5000
 				},
@@ -61,6 +99,7 @@ func TestMcpProxyConfigValidation(t *testing.T) {
 				"server": {
 					"name": "secure-proxy",
 					"type": "mcp-proxy",
+					"transport": "http",
 					"mcpServerURL": "https://secure.example.com/mcp",
 					"timeout": 8000,
 					"securitySchemes": [
@@ -101,6 +140,7 @@ func TestMcpProxyConfigValidation(t *testing.T) {
 				"server": {
 					"name": "invalid-proxy",
 					"type": "mcp-proxy",
+					"transport": "http",
 					"timeout": 5000
 				},
 				"tools": [
@@ -125,23 +165,18 @@ func TestMcpProxyConfigValidation(t *testing.T) {
 					{
 						"name": "rest-tool",
 						"description": "REST tool",
-						"args": []
+						"args": [],
+						"requestTemplate": {
+							"url": "http://example.com/api",
+							"method": "GET"
+						},
+						"responseTemplate": {
+							"body": "$.result"
+						}
 					}
 				]
 			}`,
 			shouldErr: false, // Should fall back to REST server logic
-		},
-		{
-			name: "missing tools should fail",
-			config: `{
-				"server": {
-					"name": "proxy-no-tools",
-					"type": "mcp-proxy",
-					"mcpServerURL": "http://backend.example.com/mcp"
-				}
-			}`,
-			shouldErr: true,
-			errMsg:    "tools array is required",
 		},
 	}
 

@@ -147,11 +147,11 @@ func TestExtractEndpointURL(t *testing.T) {
 			wantErr:      false,
 		},
 		{
-			name:         "invalid base URL",
+			name:         "path-only base URL",
 			endpointData: "/messages",
-			baseURL:      "not-a-url",
-			want:         "",
-			wantErr:      true,
+			baseURL:      "/api/v1",
+			want:         "/messages",
+			wantErr:      false,
 		},
 	}
 

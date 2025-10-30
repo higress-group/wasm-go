@@ -193,27 +193,30 @@ func ParseSSEMessage(data []byte) (*SSEMessage, []byte, error) {
 }
 
 // ExtractEndpointURL extracts the endpoint URL from an SSE endpoint message
+// It handles two cases:
+// 1. endpointData is a full URL (e.g., http://example.com/sse) - return as-is
+// 2. endpointData is a path - if baseURL has scheme and host, combine them; otherwise return the path as-is
 func ExtractEndpointURL(endpointData string, baseURL string) (string, error) {
-	// The endpoint data could be a full URL or a path
+	// Case 1: endpointData is a full URL
 	if strings.HasPrefix(endpointData, "http://") || strings.HasPrefix(endpointData, "https://") {
-		// Full URL
 		return endpointData, nil
 	}
 
-	// Path only, need to combine with base URL
+	// endpointData is a path
 	parsedBase, err := url.Parse(baseURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse base URL: %v", err)
 	}
 
-	// Validate that base URL has required components
-	if parsedBase.Scheme == "" || parsedBase.Host == "" {
-		return "", fmt.Errorf("invalid base URL: missing scheme or host")
+	// Case 2: baseURL has scheme and host, combine them
+	if parsedBase.Scheme != "" && parsedBase.Host != "" {
+		// Combine scheme, host, and the new path
+		result := parsedBase.Scheme + "://" + parsedBase.Host + endpointData
+		return result, nil
 	}
 
-	// Combine scheme, host, and the new path
-	result := parsedBase.Scheme + "://" + parsedBase.Host + endpointData
-	return result, nil
+	// Case 3: baseURL is also just a path, return endpointData as-is
+	return endpointData, nil
 }
 
 // sendSSEInitialize sends the initialize request for SSE protocol
@@ -261,6 +264,9 @@ func sendSSEInitialize(ctx wrapper.HttpContext, endpointURL string, authInfo *Pr
 		}
 	}
 
+	// Note: headers are already copied from the current request (which has server-level headers applied)
+	// via copyHeadersForSSERequest, so no need to apply them again
+
 	// Store state for tracking
 	ctx.SetContext(CtxSSEProxyState, SSEStateWaitingInitResp)
 	ctx.SetContext(CtxSSEProxyRequestID, 1)
@@ -275,7 +281,8 @@ func sendSSEInitialize(ctx wrapper.HttpContext, endpointURL string, authInfo *Pr
 	return client.Post(finalURL, finalHeaders, requestBody, func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		if statusCode != 200 && statusCode != 202 {
 			log.Errorf("SSE initialize request failed with status %d: %s", statusCode, string(responseBody))
-			utils.OnMCPResponseError(ctx, fmt.Errorf("SSE initialize failed"), utils.ErrInternalError, "mcp-proxy:sse:initialize:error")
+			// At this point, we're in streaming response phase, must use injectSSEResponseError
+			injectSSEResponseError(ctx, fmt.Errorf("SSE initialize failed with status %d", statusCode), utils.ErrInternalError)
 			return
 		}
 
@@ -315,6 +322,9 @@ func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, authInfo *
 		}
 	}
 
+	// Note: headers are already copied from the current request (which has server-level headers applied)
+	// via copyHeadersForSSERequest, so no need to apply them again
+
 	// Store state for tracking
 	ctx.SetContext(CtxSSEProxyState, SSEStateWaitingNotifyResp)
 
@@ -343,7 +353,8 @@ func sendSSENotification(ctx wrapper.HttpContext, endpointURL string, authInfo *
 
 		if endpointURLRaw == nil || proxyServerRaw == nil || requestBodyRaw == nil {
 			log.Errorf("Missing context for sending tool request")
-			utils.OnMCPResponseError(ctx, fmt.Errorf("internal error"), utils.ErrInternalError, "mcp-proxy:sse:missing_context")
+			// At this point, we're in streaming response phase, must use injectSSEResponseError
+			injectSSEResponseError(ctx, fmt.Errorf("internal error: missing context"), utils.ErrInternalError)
 			return
 		}
 
@@ -384,6 +395,9 @@ func sendSSEToolRequest(ctx wrapper.HttpContext, endpointURL string, authInfo *P
 		}
 	}
 
+	// Note: headers are already copied from the current request (which has server-level headers applied)
+	// via copyHeadersForSSERequest, so no need to apply them again
+
 	// Store state for tracking
 	ctx.SetContext(CtxSSEProxyState, SSEStateWaitingToolResp)
 	ctx.SetContext(CtxSSEProxyRequestID, requestID)
@@ -398,7 +412,8 @@ func sendSSEToolRequest(ctx wrapper.HttpContext, endpointURL string, authInfo *P
 	return client.Post(finalURL, finalHeaders, requestBody, func(statusCode int, responseHeaders http.Header, responseBody []byte) {
 		if statusCode != 200 && statusCode != 202 {
 			log.Errorf("SSE tool request failed with status %d: %s", statusCode, string(responseBody))
-			utils.OnMCPResponseError(ctx, fmt.Errorf("SSE tool request failed"), utils.ErrInternalError, "mcp-proxy:sse:tool:error")
+			// At this point, we're in streaming response phase, must use injectSSEResponseError
+			injectSSEResponseError(ctx, fmt.Errorf("SSE tool request failed with status %d", statusCode), utils.ErrInternalError)
 			return
 		}
 

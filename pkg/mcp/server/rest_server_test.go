@@ -145,8 +145,13 @@ func TestResponseTemplatePrependAppend(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create a tool with the test template
+			// For tests with only prepend/append (no body), add a RequestTemplate.URL
+			// to avoid direct response mode validation
 			tool := RestTool{
 				ResponseTemplate: tt.template,
+			}
+			if tt.template.Body == "" && (tt.template.PrependBody != "" || tt.template.AppendBody != "") {
+				tool.RequestTemplate.URL = "http://example.com/api"
 			}
 
 			// Parse templates

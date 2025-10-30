@@ -51,17 +51,18 @@ func validateURL(urlStr string) error {
 		return fmt.Errorf("invalid URL format: %v", err)
 	}
 
-	if parsedURL.Scheme == "" {
-		return errors.New("url must include a scheme (http or https)")
-	}
+	// Allow both full URLs (with scheme and host) and path-only URLs
+	// Path-only URLs will be resolved against the cluster's base URL
+	if parsedURL.Scheme != "" {
+		// If scheme is provided, host must also be provided
+		if parsedURL.Host == "" {
+			return errors.New("url with scheme must include a host")
+		}
 
-	if parsedURL.Host == "" {
-		return errors.New("url must include a host")
-	}
-
-	// Only allow http and https schemes for security
-	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return fmt.Errorf("unsupported URL scheme '%s', only http and https are allowed", parsedURL.Scheme)
+		// Only allow http and https schemes for security
+		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+			return fmt.Errorf("unsupported URL scheme '%s', only http and https are allowed", parsedURL.Scheme)
+		}
 	}
 
 	return nil
@@ -752,7 +753,7 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types
 		proxywasm.SendHttpResponseWithDetail(405, "not_support_sse_on_this_endpoint", nil, nil, -1)
 		return types.HeaderStopAllIterationAndWatermark
 	}
-	if !wrapper.HasRequestBody() {
+	if !ctx.HasRequestBody() {
 		proxywasm.SendHttpResponseWithDetail(400, "missing_body_in_mcp_request", nil, nil, -1)
 		return types.HeaderStopAllIterationAndWatermark
 	}
@@ -768,7 +769,7 @@ func onHttpResponseHeaders(ctx wrapper.HttpContext, config McpServerConfig) type
 	// Only these requests need special SSE streaming response processing
 	if ctx.GetContext(CtxSSEProxyState) != nil {
 		// Check if response has a body
-		if wrapper.HasResponseBody() {
+		if ctx.HasResponseBody() {
 			// Pause streaming response for processing
 			// Content-type validation will be done in onHttpStreamingResponseBody
 			ctx.NeedPauseStreamingResponse()
