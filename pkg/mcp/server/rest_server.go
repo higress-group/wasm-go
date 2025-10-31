@@ -15,7 +15,6 @@ package server
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +30,13 @@ import (
 	"github.com/higress-group/wasm-go/pkg/mcp/utils"
 	"github.com/higress-group/wasm-go/pkg/wrapper"
 )
+
+// RestMCPConfig represents the configuration for REST MCP server
+type RestMCPConfig struct {
+	SecuritySchemes           []SecurityScheme    `json:"securitySchemes,omitempty"`
+	DefaultDownstreamSecurity SecurityRequirement `json:"defaultDownstreamSecurity,omitempty"` // Default client-to-gateway authentication for all tools
+	DefaultUpstreamSecurity   SecurityRequirement `json:"defaultUpstreamSecurity,omitempty"`   // Default gateway-to-backend authentication for all tools
+}
 
 // RestToolArg represents an argument for a REST tool
 type RestToolArg struct {
@@ -53,13 +59,6 @@ type RestToolArg struct {
 type RestToolHeader struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
-}
-
-// SecurityRequirement specifies a security scheme requirement for a tool
-type SecurityRequirement struct {
-	ID          string `json:"id"`                    // References a security scheme ID
-	Credential  string `json:"credential,omitempty"`  // Overrides default credential
-	Passthrough bool   `json:"passthrough,omitempty"` // If true, credentials from client request will be passed through
 }
 
 // RestToolRequestTemplate defines how to construct the HTTP request
@@ -251,22 +250,15 @@ func executeTemplate(tmpl *template.Template, data []byte) (string, error) {
 	return buf.String(), nil
 }
 
-// SecurityScheme defines a security scheme for the REST API
-type SecurityScheme struct {
-	ID                string `json:"id"`
-	Type              string `json:"type"`             // http, apiKey
-	Scheme            string `json:"scheme,omitempty"` // basic, bearer (for type: http)
-	In                string `json:"in,omitempty"`     // header, query (for type: apiKey)
-	Name              string `json:"name,omitempty"`   // Header or query parameter name (for type: apiKey)
-	DefaultCredential string `json:"defaultCredential,omitempty"`
-}
-
 // RestMCPServer implements Server interface for REST-to-MCP conversion
 type RestMCPServer struct {
-	name            string
-	base            BaseMCPServer
-	toolsConfig     map[string]RestTool // Store original tool configs for template rendering
-	securitySchemes map[string]SecurityScheme
+	name                      string
+	base                      BaseMCPServer
+	toolsConfig               map[string]RestTool // Store original tool configs for template rendering
+	securitySchemes           map[string]SecurityScheme
+	defaultDownstreamSecurity SecurityRequirement // Default client-to-gateway authentication
+	defaultUpstreamSecurity   SecurityRequirement // Default gateway-to-backend authentication
+	passthroughAuthHeader     bool                // If true, pass through Authorization header even without downstream security
 }
 
 // NewRestMCPServer creates a new REST-to-MCP server
@@ -291,6 +283,36 @@ func (s *RestMCPServer) AddSecurityScheme(scheme SecurityScheme) {
 func (s *RestMCPServer) GetSecurityScheme(id string) (SecurityScheme, bool) {
 	scheme, ok := s.securitySchemes[id]
 	return scheme, ok
+}
+
+// SetDefaultDownstreamSecurity sets the default downstream security configuration
+func (s *RestMCPServer) SetDefaultDownstreamSecurity(security SecurityRequirement) {
+	s.defaultDownstreamSecurity = security
+}
+
+// GetDefaultDownstreamSecurity gets the default downstream security configuration
+func (s *RestMCPServer) GetDefaultDownstreamSecurity() SecurityRequirement {
+	return s.defaultDownstreamSecurity
+}
+
+// SetDefaultUpstreamSecurity sets the default upstream security configuration
+func (s *RestMCPServer) SetDefaultUpstreamSecurity(security SecurityRequirement) {
+	s.defaultUpstreamSecurity = security
+}
+
+// GetDefaultUpstreamSecurity gets the default upstream security configuration
+func (s *RestMCPServer) GetDefaultUpstreamSecurity() SecurityRequirement {
+	return s.defaultUpstreamSecurity
+}
+
+// SetPassthroughAuthHeader sets the passthrough auth header flag
+func (s *RestMCPServer) SetPassthroughAuthHeader(passthrough bool) {
+	s.passthroughAuthHeader = passthrough
+}
+
+// GetPassthroughAuthHeader gets the passthrough auth header flag
+func (s *RestMCPServer) GetPassthroughAuthHeader() bool {
+	return s.passthroughAuthHeader
 }
 
 // AddMCPTool implements Server interface
@@ -471,212 +493,84 @@ func hasContentType(headers [][2]string, contentTypeSubstr string) bool {
 	return false
 }
 
-// extractAndRemoveIncomingCredential extracts a credential from the current incoming HTTP request
-// and removes it. It uses global proxywasm functions to access request details.
-// For query parameters, "removal" is conceptual as we build a new request;
-// this function primarily extracts the value for potential passthrough.
-func extractAndRemoveIncomingCredential(scheme SecurityScheme) (string, error) {
-	credentialValue := ""
-	var err error
-
-	switch scheme.Type {
-	case "http":
-		authHeader, _ := proxywasm.GetHttpRequestHeader("Authorization") // Error ignored, check content
-		if authHeader == "" {
-			// If no header, it's not an error for extraction if not required, but indicates not found.
-			// For removal, there's nothing to remove.
-			return "", nil // Or a specific "not found" error if scheme implies it must be there.
-		}
-
-		if scheme.Scheme == "bearer" {
-			if !strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
-				return "", fmt.Errorf("incoming Authorization header is not Bearer auth: %s", authHeader)
-			}
-			credentialValue = strings.TrimSpace(authHeader[len("Bearer "):])
-		} else if scheme.Scheme == "basic" {
-			if !strings.HasPrefix(strings.ToLower(authHeader), "basic ") {
-				return "", fmt.Errorf("incoming Authorization header is not Basic auth: %s", authHeader)
-			}
-			credentialValue = strings.TrimSpace(authHeader[len("Basic "):])
-		} else {
-			return "", fmt.Errorf("unsupported http scheme for credential extraction/removal: %s", scheme.Scheme)
-		}
-		proxywasm.RemoveHttpRequestHeader("Authorization")
-		log.Debugf("Extracted and removed Authorization header for incoming %s scheme.", scheme.Scheme)
-
-	case "apiKey":
-		if scheme.In == "header" {
-			if scheme.Name == "" {
-				return "", errors.New("apiKey in header requires a name for the header")
-			}
-			headerValue, _ := proxywasm.GetHttpRequestHeader(scheme.Name) // Error ignored, check content
-			if headerValue == "" {
-				return "", nil // Not found, not necessarily an error for extraction.
-			}
-			credentialValue = headerValue
-			proxywasm.RemoveHttpRequestHeader(scheme.Name)
-			log.Debugf("Extracted and removed %s header for incoming apiKey auth.", scheme.Name)
-		} else if scheme.In == "query" {
-			if scheme.Name == "" {
-				return "", errors.New("apiKey in query requires a name for the query parameter")
-			}
-			pathHeader, _ := proxywasm.GetHttpRequestHeader(":path") // Error ignored, check content
-			if pathHeader == "" {
-				// This case might be an error as :path should generally exist.
-				return "", fmt.Errorf("no :path header found in incoming request for apiKey in query")
-			}
-
-			requestURL, parseErr := url.Parse(pathHeader)
-			if parseErr != nil {
-				return "", fmt.Errorf("failed to parse incoming :path header '%s': %v", pathHeader, parseErr)
-			}
-
-			queryValues := requestURL.Query()
-			apiKeyValue := queryValues.Get(scheme.Name)
-			if apiKeyValue == "" {
-				return "", nil // Not found
-			}
-			credentialValue = apiKeyValue
-			log.Debugf("Extracted %s query parameter from incoming request. Removal from original :path is implicit.", scheme.Name)
-		} else {
-			return "", fmt.Errorf("unsupported apiKey 'in' value: %s", scheme.In)
-		}
-	default:
-		return "", fmt.Errorf("unsupported security scheme type for credential extraction/removal: %s", scheme.Type)
-	}
-
-	return credentialValue, err
-}
-
-// AuthRequestContext holds the data needed for applying security schemes.
-type AuthRequestContext struct {
-	Method                string
-	Headers               [][2]string // Direct slice, modifications within applySecurity will update this field in the struct instance
-	ParsedURL             *url.URL    // Pointer to allow modification (e.g., RawQuery)
-	RequestBody           []byte      // For future security types that might inspect the body
-	PassthroughCredential string      // Credential extracted from client request for passthrough
-}
-
-// applySecurity applies the configured security scheme to the request.
+// applySecurity applies the configured security scheme to the request with fallback to default upstream security.
 // It modifies reqCtx.Headers and reqCtx.ParsedURL (specifically RawQuery) in place if necessary.
 func (t *RestMCPTool) applySecurity(serverObj Server, reqCtx *AuthRequestContext) error {
-	if t.toolConfig.RequestTemplate.Security.ID == "" {
-		return nil // No security scheme defined for this tool
-	}
-	if reqCtx.ParsedURL == nil {
-		return errors.New("ParsedURL in AuthRequestContext cannot be nil for applySecurity")
-	}
-
 	restServer, ok := serverObj.(*RestMCPServer)
 	if !ok {
 		return errors.New("server is not a RestMCPServer")
 	}
-	upstreamScheme, schemeOk := restServer.GetSecurityScheme(t.toolConfig.RequestTemplate.Security.ID)
-	if !schemeOk {
-		return fmt.Errorf("upstream security scheme with id '%s' not found", t.toolConfig.RequestTemplate.Security.ID)
-	}
 
-	var credentialToUse string
-	if reqCtx.PassthroughCredential != "" {
-		// Use the passthrough credential value.
-		// The upstreamScheme dictates how this value is formatted and applied.
-		credentialToUse = reqCtx.PassthroughCredential
-		log.Debugf("Using passthrough credential for upstream request with scheme %s.", upstreamScheme.ID)
+	// Determine which upstream security to use: tool-level or server's default
+	var upstreamSecurity SecurityRequirement
+	if t.toolConfig.RequestTemplate.Security.ID != "" {
+		// Use tool-level upstream security if configured
+		upstreamSecurity = t.toolConfig.RequestTemplate.Security
+		log.Debugf("Using tool-level upstream security for tool %s: %s", t.name, upstreamSecurity.ID)
 	} else {
-		// Use configured credential for the upstream request.
-		credentialToUse = upstreamScheme.DefaultCredential
-		if t.toolConfig.RequestTemplate.Security.Credential != "" {
-			credentialToUse = t.toolConfig.RequestTemplate.Security.Credential
+		// Fall back to server's default upstream security
+		upstreamSecurity = restServer.GetDefaultUpstreamSecurity()
+		if upstreamSecurity.ID != "" {
+			log.Debugf("Using default upstream security for tool %s: %s", t.name, upstreamSecurity.ID)
 		}
-		if credentialToUse == "" {
-			return fmt.Errorf("no credential found or configured for upstream security scheme '%s'", upstreamScheme.ID)
-		}
-		log.Debugf("Using configured credential for upstream request with scheme %s.", upstreamScheme.ID)
 	}
 
-	switch upstreamScheme.Type {
-	case "http":
-		authValue := credentialToUse
-		if upstreamScheme.Scheme == "basic" {
-			if !strings.HasPrefix(authValue, "Basic ") {
-				if reqCtx.PassthroughCredential != "" { // Came from passthrough, it's the base64 token part
-					authValue = "Basic " + credentialToUse
-				} else { // Came from config
-					if strings.Contains(credentialToUse, ":") { // Assumed to be "user:pass"
-						authValue = "Basic " + base64.StdEncoding.EncodeToString([]byte(credentialToUse))
-					} else { // Assumed to be already base64 encoded string (token part)
-						authValue = "Basic " + credentialToUse
-					}
-				}
-			}
-		} else if upstreamScheme.Scheme == "bearer" {
-			// Passthrough for Bearer gives the token part. Configured credential is the token.
-			if !strings.HasPrefix(authValue, "Bearer ") {
-				authValue = "Bearer " + credentialToUse
-			}
-		} else {
-			return fmt.Errorf("unsupported http scheme type for upstream: %s", upstreamScheme.Scheme)
-		}
-		reqCtx.Headers = append(reqCtx.Headers, [2]string{"Authorization", authValue})
-	case "apiKey":
-		if upstreamScheme.In == "header" {
-			if upstreamScheme.Name == "" {
-				return errors.New("apiKey in header requires a name for the header for upstream")
-			}
-			reqCtx.Headers = append(reqCtx.Headers, [2]string{upstreamScheme.Name, credentialToUse})
-		} else if upstreamScheme.In == "query" {
-			if upstreamScheme.Name == "" {
-				return errors.New("apiKey in query requires a name for the query parameter for upstream")
-			}
-			queryValues := reqCtx.ParsedURL.Query()
-			queryValues.Set(upstreamScheme.Name, credentialToUse)
-			reqCtx.ParsedURL.RawQuery = queryValues.Encode()
-		} else {
-			return fmt.Errorf("unsupported apiKey 'in' value for upstream: %s", upstreamScheme.In)
-		}
-	default:
-		return fmt.Errorf("unsupported security scheme type: %s", upstreamScheme.Type)
-	}
-	return nil
+	// Apply security using the determined configuration
+	return ApplySecurity(upstreamSecurity, restServer, reqCtx)
 }
 
 // Call implements Tool interface
 func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 	ctx := httpCtx.(wrapper.HttpContext)
 
-	// Get server config
-	var config map[string]interface{}
-	server.GetConfig(&config)
+	// Get server instance for configuration access
+	restServer, ok := server.(*RestMCPServer)
+	if !ok {
+		return fmt.Errorf("server is not a RestMCPServer")
+	}
 
-	// Handle tool-level security: extract credential for passthrough and remove original
+	// Handle tool-level or default downstream security: extract credential for passthrough if configured
+	// toolConfig.Security represents client-to-gateway authentication, falls back to server's defaultDownstreamSecurity
 	passthroughCredential := ""
+	var downstreamSecurity SecurityRequirement
 	if t.toolConfig.Security.ID != "" {
-		restServer, ok := server.(*RestMCPServer)
-		if !ok {
-			log.Warnf("Server is not a RestMCPServer, cannot process tool-level security for tool %s.", t.name)
-		} else {
-			clientScheme, schemeOk := restServer.GetSecurityScheme(t.toolConfig.Security.ID)
-			if !schemeOk {
-				log.Warnf("Tool-level security scheme ID '%s' not found for tool %s.", t.toolConfig.Security.ID, t.name)
-			} else {
-				// Extract and remove the credential from the incoming request
-				extractedCred, err := extractAndRemoveIncomingCredential(clientScheme)
-				if err != nil {
-					log.Warnf("Failed to extract/remove incoming credential for tool %s using scheme %s: %v", t.name, clientScheme.ID, err)
-				} else if extractedCred == "" {
-					log.Debugf("No incoming credential found for tool %s using scheme %s for extraction/removal.", t.name, clientScheme.ID)
-				}
+		// Use tool-level security if configured
+		downstreamSecurity = t.toolConfig.Security
+		log.Debugf("Using tool-level downstream security for tool %s: %s", t.name, downstreamSecurity.ID)
+	} else {
+		// Fall back to server's default downstream security
+		downstreamSecurity = restServer.GetDefaultDownstreamSecurity()
+		if downstreamSecurity.ID != "" {
+			log.Debugf("Using default downstream security for tool %s: %s", t.name, downstreamSecurity.ID)
+		}
+	}
 
-				if t.toolConfig.Security.Passthrough && extractedCred != "" {
-					passthroughCredential = extractedCred
-					log.Debugf("Passthrough credential set for tool %s.", t.name)
-				}
+	if downstreamSecurity.ID != "" {
+		clientScheme, schemeOk := restServer.GetSecurityScheme(downstreamSecurity.ID)
+		if !schemeOk {
+			log.Warnf("Downstream security scheme ID '%s' not found for tool %s.", downstreamSecurity.ID, t.name)
+		} else {
+			// Extract and remove the credential from the incoming request
+			extractedCred, err := ExtractAndRemoveIncomingCredential(clientScheme)
+			if err != nil {
+				log.Warnf("Failed to extract/remove incoming credential for tool %s using scheme %s: %v", t.name, clientScheme.ID, err)
+			} else if extractedCred == "" {
+				log.Debugf("No incoming credential found for tool %s using scheme %s for extraction/removal.", t.name, clientScheme.ID)
+			}
+
+			// Only use passthrough if explicitly configured
+			if downstreamSecurity.Passthrough && extractedCred != "" {
+				passthroughCredential = extractedCred
+				log.Debugf("Passthrough credential set for tool %s.", t.name)
 			}
 		}
 	}
 
 	var templateDataBytes []byte
-	templateDataBytes, _ = sjson.SetBytes(templateDataBytes, "config", config)
+	// Get server config for template data if needed (but don't use for default security)
+	var serverConfig map[string]interface{}
+	restServer.GetConfig(&serverConfig)
+	templateDataBytes, _ = sjson.SetBytes(templateDataBytes, "config", serverConfig)
 	templateDataBytes, _ = sjson.SetBytes(templateDataBytes, "args", t.arguments)
 
 	// Check if this is a direct response tool (no HTTP request needed)
@@ -736,8 +630,11 @@ func (t *RestMCPTool) Call(httpCtx HttpContext, server Server) error {
 
 	// Authorization or specific API key headers are handled by extractAndRemoveIncomingCredential if tool-level security is defined.
 	// If no tool-level security is defined, this generic RemoveHttpRequestHeader("Authorization") acts as a fallback.
+	// Unless passthroughAuthHeader is explicitly set to true.
 	if t.toolConfig.Security.ID == "" {
-		proxywasm.RemoveHttpRequestHeader("Authorization") // Remove if not handled by specific scheme
+		if !restServer.GetPassthroughAuthHeader() {
+			proxywasm.RemoveHttpRequestHeader("Authorization") // Remove if not handled by specific scheme
+		}
 	}
 	// General cleanup of Accept header from original client request.
 	proxywasm.RemoveHttpRequestHeader("Accept")
