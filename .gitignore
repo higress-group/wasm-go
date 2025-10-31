@@ -4,6 +4,7 @@ out
 *.wasm
 .DS_Store
 coverage.xml
+.design/
 .idea/
 .vscode/
 .cursor/
