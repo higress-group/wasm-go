@@ -168,6 +168,7 @@ func redisCallInternal(cluster Cluster, respQuery []byte, callback RedisResponse
 			}
 
 			// Check for NOAUTH error and retry if possible
+			shouldInvokeCallback := true
 			if responseValue.Error() != nil && readyPtr != nil && checkReadyFunc != nil {
 				errMsg := responseValue.Error().Error()
 				if bytes.Contains([]byte(errMsg), []byte("NOAUTH Authentication required")) {
@@ -180,16 +181,19 @@ func redisCallInternal(cluster Cluster, respQuery []byte, callback RedisResponse
 						// Retry the Redis call
 						retryErr := redisCallInternal(cluster, respQuery, callback, nil, nil)
 						if retryErr != nil {
-							proxywasm.LogErrorf("redis retry failed, request-id: %s, error: %v", requestID, retryErr)
+							// Retry dispatch failed, fall through to invoke callback with original error
+							proxywasm.LogErrorf("redis retry dispatch failed, request-id: %s, error: %v", requestID, retryErr)
+						} else {
+							// Retry succeeded, callback will be invoked by the retry call
+							shouldInvokeCallback = false
 						}
-						return
 					} else {
 						proxywasm.LogErrorf("redis re-authentication failed, request-id: %s, error: %v", requestID, err)
 					}
 				}
 			}
 
-			if callback != nil {
+			if shouldInvokeCallback && callback != nil {
 				callback(responseValue)
 			}
 		})
