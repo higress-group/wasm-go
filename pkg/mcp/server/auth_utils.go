@@ -25,6 +25,25 @@ import (
 	"github.com/higress-group/wasm-go/pkg/log"
 )
 
+// setOrReplaceHeader sets or replaces a header in the headers slice.
+// If the header exists (case-insensitive comparison), it replaces the value.
+// If the header doesn't exist, it appends a new header.
+func setOrReplaceHeader(headers *[][2]string, key, value string) {
+	lowerKey := strings.ToLower(key)
+
+	// Check if header already exists
+	for i, header := range *headers {
+		if strings.ToLower(header[0]) == lowerKey {
+			// Replace existing header value
+			(*headers)[i][1] = value
+			return
+		}
+	}
+
+	// Header doesn't exist, append new one
+	*headers = append(*headers, [2]string{key, value})
+}
+
 // SecurityScheme defines a security scheme for the REST API
 type SecurityScheme struct {
 	ID                string `json:"id"`
@@ -189,13 +208,13 @@ func ApplySecurity(securityConfig SecurityRequirement, provider SecuritySchemePr
 		} else {
 			return fmt.Errorf("unsupported http scheme type for upstream: %s", upstreamScheme.Scheme)
 		}
-		reqCtx.Headers = append(reqCtx.Headers, [2]string{"Authorization", authValue})
+		setOrReplaceHeader(&reqCtx.Headers, "Authorization", authValue)
 	case "apiKey":
 		if upstreamScheme.In == "header" {
 			if upstreamScheme.Name == "" {
 				return errors.New("apiKey in header requires a name for the header for upstream")
 			}
-			reqCtx.Headers = append(reqCtx.Headers, [2]string{upstreamScheme.Name, credentialToUse})
+			setOrReplaceHeader(&reqCtx.Headers, upstreamScheme.Name, credentialToUse)
 		} else if upstreamScheme.In == "query" {
 			if upstreamScheme.Name == "" {
 				return errors.New("apiKey in query requires a name for the query parameter for upstream")
