@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-1.24-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.24-
+
+      - name: Download dependencies
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Run tests in pkg directory
+        run: |
+          echo "Running tests in pkg directory..."
+          if [ -f "go.mod" ]; then
+            echo "Testing root pkg modules..."
+            go test -v -race -coverprofile=coverage.out -covermode=atomic ./pkg/...
+          fi
+
+      - name: Run tests in examples directory
+        run: |
+          echo "Running tests in examples directory..."
+          cd examples
+          for dir in */; do
+            if [ -f "${dir}go.mod" ]; then
+              echo "Testing example: ${dir}..."
+              cd "$dir"
+              go test -v -coverprofile=coverage.out -covermode=atomic ./...
+              cd ..
+            fi
+          done
+
+      - name: Check code formatting
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "The following files are not formatted:"
+            gofmt -l .
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: |
+          go vet ./...
+          cd examples
+          for dir in */; do
+            if [ -f "${dir}go.mod" ]; then
+              cd "$dir"
+              go vet ./...
+              cd ..
+            fi
+          done
+
+  # lint:
+  #   name: Lint
+  #   runs-on: ubuntu-latest
+    
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Set up Go
+  #       uses: actions/setup-go@v5
+  #       with:
+  #         go-version: '1.24'
+  #         cache: true
+
+  #     - name: Run golangci-lint
+  #       uses: golangci/golangci-lint-action@v4
+  #       with:
+  #         version: latest
+  #         args: --timeout=5m
+

@@ -808,7 +808,40 @@ func handleWaitingToolResp(ctx wrapper.HttpContext, config McpServerConfig, buff
 					// Extract result and return to client
 					if result, hasResult := jsonRpcResp["result"]; hasResult {
 						if resultMap, ok := result.(map[string]interface{}); ok {
-							injectSSEResponseSuccess(ctx, resultMap)
+							// Apply allowTools filtering if this is a tools/list response
+							filteredResult := resultMap
+							if _, hasTools := resultMap["tools"]; hasTools {
+								// Get pre-computed effective allowTools from context
+								if allowToolsCtx := ctx.GetContext("mcp_proxy_effective_allow_tools"); allowToolsCtx != nil {
+									if effectiveAllowTools, ok := allowToolsCtx.(*map[string]struct{}); ok && effectiveAllowTools != nil {
+										// Apply filtering
+										if tools, hasToolsArray := resultMap["tools"]; hasToolsArray {
+											if toolsArray, ok := tools.([]interface{}); ok {
+												filteredTools := make([]interface{}, 0)
+												for _, tool := range toolsArray {
+													if toolMap, ok := tool.(map[string]interface{}); ok {
+														if name, hasName := toolMap["name"]; hasName {
+															if toolName, ok := name.(string); ok {
+																if _, allow := (*effectiveAllowTools)[toolName]; allow {
+																	filteredTools = append(filteredTools, tool)
+																}
+															}
+														}
+													}
+												}
+												// Create filtered result
+												filteredResult = make(map[string]interface{})
+												for k, v := range resultMap {
+													filteredResult[k] = v
+												}
+												filteredResult["tools"] = filteredTools
+											}
+										}
+									}
+								}
+							}
+
+							injectSSEResponseSuccess(ctx, filteredResult)
 							// Clear buffer as we've processed the response
 							*buffer = []byte{}
 							ctx.SetContext(CtxSSEProxyBuffer, *buffer)
