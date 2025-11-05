@@ -35,8 +35,9 @@ description: MCP 服务器插件配置参考
 | `server.name` | string     | 必填     | -      | MCP 服务器的名称。如果使用插件内置的 MCP 服务器（如 quark-search），只需配置此字段为对应的名称，无需配置 tools 字段。如果是 REST-to-MCP 场景，此字段可以填写任意值。 |
 | `server.type` | string     | 选填     | rest   | MCP 服务器类型。可选值：`rest`（REST-to-MCP 转换）、`mcp-proxy`（MCP 代理）。如果不指定，默认为 `rest` 类型。 |
 | `server.config` | object     | 选填     | {}     | 服务器配置，如 API 密钥等      |
-| `server.mcpServerURL` | string | 当 `server.type` 为 `mcp-proxy` 时必填 | - | 后端 MCP 服务器的 URL 地址。仅在 `mcp-proxy` 类型时使用。 |
+| `server.mcpServerURL` | string | 当 `server.type` 为 `mcp-proxy` 时必填 | - | 后端 MCP 服务器的 URL 地址。仅在 `mcp-proxy` 类型时使用。支持完整 URL（如 `http://example.com/mcp`）或路径（如 `/mcp`，将使用路由集群的基础 URL）。 |
 | `server.timeout` | integer | 选填 | 5000 | 请求后端服务的超时时间（毫秒）。适用于 `mcp-proxy` 类型。 |
+| `server.transport` | string | 当 `server.type` 为 `mcp-proxy` 时必填 | - | 传输协议类型。可选值：`http`（StreamableHTTP）、`sse`（Server-Sent Events）。 |
 | `server.securitySchemes` | array of object | 选填 | - | 定义可重用的认证方案，供工具引用。详见"认证与安全"章节。 |
 | `server.defaultDownstreamSecurity` | object | 选填 | - | 服务器级别的默认客户端到网关认证配置，用于所有 tools/list 和 tools/call 请求。可被工具级别的 `security` 配置覆盖。支持 `id`（引用 securitySchemes）和 `passthrough`（透传标志）字段。 |
 | `server.defaultUpstreamSecurity` | object | 选填 | - | 服务器级别的默认网关到后端认证配置，用于所有后端请求。可被工具级别的 `requestTemplate.security` 配置覆盖。支持 `id`（引用 securitySchemes）和 `credential`（覆盖默认凭证）字段。 |
@@ -173,6 +174,56 @@ proxywasm.AddHttpRequestHeader("x-envoy-allow-mcp-tools", "tool1,tool2,tool3")
 | `tools[].requestTemplate.security.credential` | string | 选填 | - | 覆盖 `server.securitySchemes` 中定义的默认凭证。如果同时启用了 `tools[].security.passthrough`，则此字段将被忽略，优先使用透传的凭证。 |
 | `tools[].errorResponseTemplate`       | string  | 选填     | -      | HTTP响应Status>=300 \\|\\| <200 时的错误响应转换模板 |
 
+## MCP 传输协议
+
+MCP 代理服务器 (`mcp-proxy` 类型) 支持两种传输协议与后端 MCP 服务器通信：
+
+### StreamableHTTP 协议 (`transport: http`)
+
+StreamableHTTP 是 MCP 的默认 HTTP 传输协议，使用标准的 HTTP 请求/响应模型：
+
+- **特点**：
+  - 简单的请求-响应模型
+  - 使用标准 HTTP POST 请求
+  - 响应为完整的 JSON 数据
+  - 适合大多数 MCP 服务器实现
+
+- **配置示例**：
+```yaml
+server:
+  name: my-mcp-proxy
+  type: mcp-proxy
+  transport: http
+  mcpServerURL: "http://backend-mcp.example.com/mcp"
+```
+
+### SSE 协议 (`transport: sse`)
+
+SSE (Server-Sent Events) 是 MCP 的流式传输协议，支持实时数据推送：
+
+- **特点**：
+  - 基于 HTTP 的单向流式通信
+  - 支持长连接和实时消息推送
+  - 适合需要实时更新的场景
+  - 协议流程：
+    1. **发现阶段**：向后端发送 POST 请求获取 SSE 端点 URL
+    2. **初始化阶段**：通过 SSE 端点发送 `initialize` 消息
+    3. **通知阶段**：发送 `notifications/initialized` 通知
+    4. **工具调用**：根据需要执行 `tools/list` 或 `tools/call` 请求
+
+- **URL 配置**：
+  - 支持完整 URL：`http://example.com/sse`
+  - 支持路径：`/sse`（将使用 `mcpServerURL` 的基础 URL）
+
+- **配置示例**：
+```yaml
+server:
+  name: my-sse-proxy
+  type: mcp-proxy
+  transport: sse
+  mcpServerURL: "http://backend-mcp.example.com"
+  timeout: 10000  # SSE 可能需要更长的超时时间
+```
 ## 认证与安全
 
 MCP Server 插件支持灵活的认证配置，以确保与后端 REST API 或 MCP 服务器通信的安全性。插件支持两种服务器类型的认证配置：
@@ -582,12 +633,13 @@ server:
 
 此配置使用了 Higress 内置的 quark-search MCP 服务器。在这种情况下，只需要指定服务器名称和必要的配置（如 API 密钥），无需配置 tools 字段，因为工具已经在服务器中预定义好了。
 
-### MCP 代理服务器示例：代理到后端 MCP 服务器
+### MCP 代理服务器示例：代理到后端 MCP 服务器（StreamableHTTP）
 
 ```yaml
 server:
   name: my-mcpserver-proxy
   type: mcp-proxy
+  transport: http  # 使用 StreamableHTTP 协议
   mcpServerURL: "http://backend-mcp.example.com/mcp"
   timeout: 5000
   defaultDownstreamSecurity: # 客户端到网关的默认认证
@@ -620,10 +672,43 @@ tools:
 ```
 
 此配置创建了一个 MCP 代理服务器，它：
-1. 将客户端的 MCP 请求代理到 `http://backend-mcp.example.com/mcp`
+1. 使用 StreamableHTTP 协议将客户端的 MCP 请求代理到 `http://backend-mcp.example.com/mcp`
 2. 使用服务器级别的默认认证配置处理 `tools/list` 等通用请求
 3. 工具级别的认证配置可以覆盖默认设置
 4. 支持透明认证和凭证覆盖
+
+### MCP 代理服务器示例：使用 SSE 协议
+
+```yaml
+server:
+  name: my-sse-mcpserver-proxy
+  type: mcp-proxy
+  transport: sse  # 使用 SSE 协议
+  mcpServerURL: "http://backend-mcp.example.com"
+  timeout: 10000  # SSE 连接可能需要更长的超时时间
+  defaultDownstreamSecurity:
+    id: ClientBearer
+  defaultUpstreamSecurity:
+    id: BackendBearer
+  securitySchemes:
+  - id: ClientBearer
+    type: http
+    scheme: bearer
+  - id: BackendBearer
+    type: http
+    scheme: bearer
+
+allowTools:
+- weather-tool
+- news-tool
+```
+
+此配置创建了一个使用 SSE 协议的 MCP 代理服务器：
+1. 使用 SSE 流式协议与后端通信，支持实时消息推送
+2. 自动处理 SSE 连接的生命周期（发现、初始化、通知、工具调用）
+3. 原始请求头会自动复制到后端调用中
+4. 支持 `allowTools` 过滤可用工具列表
+5. 认证头会正确传递到所有 SSE 请求中
 
 ### MCP 代理服务器高级示例：透明认证
 
@@ -1000,10 +1085,13 @@ tools:
 
 ### MCP 代理服务器配置
 
+#### StreamableHTTP 协议
+
 ```yaml
 server:
   name: mcp-proxy-server
   type: mcp-proxy
+  transport: http  # StreamableHTTP 协议
   mcpServerURL: "http://backend-mcp.example.com/mcp"  # 后端 MCP 服务器 URL
   timeout: 5000  # 超时时间（毫秒）
   # 服务器级别默认认证（推荐配置）
@@ -1042,6 +1130,35 @@ tools:
       credential: "特定工具的后端凭证"
 ```
 
+#### SSE 协议
+
+```yaml
+server:
+  name: mcp-sse-proxy-server
+  type: mcp-proxy
+  transport: sse  # SSE 协议
+  mcpServerURL: "http://backend-mcp.example.com"  # 后端 MCP 服务器基础 URL
+  timeout: 10000  # SSE 通常需要更长的超时时间
+  # 服务器级别默认认证
+  defaultDownstreamSecurity:
+    id: ClientBearer
+  defaultUpstreamSecurity:
+    id: BackendBearer
+  securitySchemes:
+  - id: ClientBearer
+    type: http
+    scheme: bearer
+  - id: BackendBearer
+    type: http
+    scheme: bearer
+    defaultCredential: "后端Bearer Token"
+
+# 可选：限制允许的工具
+allowTools:
+- tool1
+- tool2
+```
+
 ## 模板语法
 
 模板使用 GJSON Template 语法 (https://github.com/higress-group/gjson_template)，该语法结合了 Go 模板和 GJSON 路径语法进行 JSON 处理。模板引擎支持：
@@ -1068,8 +1185,10 @@ tools:
 ### 如果要代理现有的 MCP 服务器
 请提供：
 - 后端 MCP 服务器的 URL
+- 传输协议类型（StreamableHTTP 或 SSE）
 - 认证要求（客户端认证、后端认证）
 - 是否需要透明认证（将客户端凭证传递给后端）
+- 是否需要限制可用工具（allowTools）
 - 特定工具的配置需求
 
 [在此描述您的具体需求]
@@ -1087,8 +1206,10 @@ tools:
 5. 配置适当的认证方案和安全配置
 
 ### 对于 MCP 代理服务器：
-1. 配置后端 MCP 服务器 URL 和超时时间
-2. 设置服务器级别的默认认证配置
-3. 根据需要配置透明认证
-4. 如有特殊需求，配置特定工具的认证覆盖
-5. 确保客户端到网关和网关到后端的认证链路完整
+1. 选择合适的传输协议（`http` 用于 StreamableHTTP，`sse` 用于 SSE）
+2. 配置后端 MCP 服务器 URL 和超时时间（SSE 建议使用更长的超时时间）
+3. 设置服务器级别的默认认证配置
+4. 根据需要配置透明认证
+5. 配置 `allowTools` 以限制可用工具（可选）
+6. 如有特殊需求，配置特定工具的认证覆盖
+7. 确保客户端到网关和网关到后端的认证链路完整
