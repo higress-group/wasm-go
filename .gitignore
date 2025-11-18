@@ -9,4 +9,5 @@ coverage.xml
 .vscode/
 .cursor/
 .specify/
+.pr/
 specs/

@@ -38,6 +38,7 @@ description: MCP 服务器插件配置参考
 | `server.mcpServerURL` | string | 当 `server.type` 为 `mcp-proxy` 时必填 | - | 后端 MCP 服务器的 URL 地址。仅在 `mcp-proxy` 类型时使用。支持完整 URL（如 `http://example.com/mcp`）或路径（如 `/mcp`，将使用路由集群的基础 URL）。 |
 | `server.timeout` | integer | 选填 | 5000 | 请求后端服务的超时时间（毫秒）。适用于 `mcp-proxy` 类型。 |
 | `server.transport` | string | 当 `server.type` 为 `mcp-proxy` 时必填 | - | 传输协议类型。可选值：`http`（StreamableHTTP）、`sse`（Server-Sent Events）。 |
+| `server.passthroughAuthHeader` | boolean | 选填 | false | 是否透传 Authorization 请求头。当设置为 `true` 时，即使没有配置客户端到网关的安全认证（`defaultDownstreamSecurity` 或工具级 `security`），也会将客户端的 `Authorization` 请求头透传到后端。默认为 `false`，即在没有明确配置安全认证时会移除 `Authorization` 请求头，防止客户端凭证被错误地传递到后端。此字段适用于需要直接透传原始认证信息的场景。 |
 | `server.securitySchemes` | array of object | 选填 | - | 定义可重用的认证方案，供工具引用。详见"认证与安全"章节。 |
 | `server.defaultDownstreamSecurity` | object | 选填 | - | 服务器级别的默认客户端到网关认证配置，用于所有 tools/list 和 tools/call 请求。可被工具级别的 `security` 配置覆盖。支持 `id`（引用 securitySchemes）和 `passthrough`（透传标志）字段。 |
 | `server.defaultUpstreamSecurity` | object | 选填 | - | 服务器级别的默认网关到后端认证配置，用于所有后端请求。可被工具级别的 `requestTemplate.security` 配置覆盖。支持 `id`（引用 securitySchemes）和 `credential`（覆盖默认凭证）字段。 |
