@@ -211,6 +211,10 @@ func ExtractEndpointURL(endpointData string, baseURL string) (string, error) {
 	// Case 2: baseURL has scheme and host, combine them
 	if parsedBase.Scheme != "" && parsedBase.Host != "" {
 		// Combine scheme, host, and the new path
+		// Ensure endpointData starts with "/"
+		if !strings.HasPrefix(endpointData, "/") {
+			endpointData = "/" + endpointData
+		}
 		result := parsedBase.Scheme + "://" + parsedBase.Host + endpointData
 		return result, nil
 	}

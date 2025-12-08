@@ -153,6 +153,20 @@ func TestExtractEndpointURL(t *testing.T) {
 			want:         "/messages",
 			wantErr:      false,
 		},
+		{
+			name:         "path without leading slash",
+			endpointData: "api/v1/messages",
+			baseURL:      "http://backend.com",
+			want:         "http://backend.com/api/v1/messages",
+			wantErr:      false,
+		},
+		{
+			name:         "path without leading slash with port",
+			endpointData: "sse/endpoint",
+			baseURL:      "https://secure.backend.com:8443",
+			want:         "https://secure.backend.com:8443/sse/endpoint",
+			wantErr:      false,
+		},
 	}
 
 	for _, tt := range tests {
