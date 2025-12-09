@@ -15,6 +15,7 @@
 package wrapper
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -89,6 +90,7 @@ type CommonVmCtx[PluginConfig any] struct {
 	onHttpStreamDone            onHttpStreamDoneFunc[PluginConfig]
 	rebuildAfterRequests        uint64 // Number of requests after which to trigger rebuild
 	requestCount                uint64 // Current request count
+	rebuildMaxMem               uint64 // Maximum memory size in bytes before triggering rebuild
 }
 
 type TickFuncEntry struct {
@@ -417,6 +419,21 @@ func (o *rebuildOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
 
 func WithRebuildAfterRequests[PluginConfig any](requestCount uint64) CtxOption[PluginConfig] {
 	return &rebuildOption[PluginConfig]{rebuildAfterRequests: requestCount}
+}
+
+type rebuildMaxMemOption[PluginConfig any] struct {
+	rebuildMaxMem uint64
+}
+
+func (o *rebuildMaxMemOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
+	ctx.rebuildMaxMem = o.rebuildMaxMem
+}
+
+// WithRebuildMaxMemBytes sets the maximum memory size in bytes before triggering a plugin rebuild.
+// When the VM memory reaches this threshold, the rebuild flag will be set.
+// memSizeBytes: The maximum memory size in bytes (e.g., 100*1024*1024 for 100MB)
+func WithRebuildMaxMemBytes[PluginConfig any](memSizeBytes uint64) CtxOption[PluginConfig] {
+	return &rebuildMaxMemOption[PluginConfig]{rebuildMaxMem: memSizeBytes}
 }
 
 type prePluginOption[PluginConfig any] struct {
@@ -948,6 +965,26 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 			proxywasm.SetProperty([]string{"wasm_need_rebuild"}, []byte("true"))
 			ctx.plugin.vm.log.Debugf("Plugin reached rebuild threshold after %d requests, rebuild flag set", ctx.plugin.vm.requestCount)
 			ctx.plugin.vm.requestCount = 0
+		}
+	}
+
+	// Check memory usage and rebuild condition
+	if ctx.plugin.vm.rebuildMaxMem > 0 {
+		data, err := proxywasm.GetProperty([]string{"plugin_vm_memory"})
+		if err != nil {
+			ctx.plugin.vm.log.Debugf("Failed to get VM memory: %v", err)
+		} else if len(data) == 8 {
+			memorySize := binary.LittleEndian.Uint64([]byte(data))
+			ctx.plugin.vm.log.Debugf("Current VM memory usage: %d bytes (%.2f MB)",
+				memorySize,
+				float64(memorySize)/(1024*1024))
+
+			if memorySize >= ctx.plugin.vm.rebuildMaxMem {
+				proxywasm.SetProperty([]string{"wasm_need_rebuild"}, []byte("true"))
+				ctx.plugin.vm.log.Debugf("Plugin reached rebuild memory threshold: %d bytes (%.2f MB), rebuild flag set",
+					memorySize,
+					float64(memorySize)/(1024*1024))
+			}
 		}
 	}
 
