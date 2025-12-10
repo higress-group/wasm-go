@@ -137,6 +137,9 @@ type SSEMessage struct {
 // Returns the parsed message and the remaining unparsed data
 func ParseSSEMessage(data []byte) (*SSEMessage, []byte, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
+	// Set max token size to 32MB to handle large messages
+	maxTokenSize := 32 * 1024 * 1024 // 32MB
+	scanner.Buffer(make([]byte, 0, 64*1024), maxTokenSize)
 	msg := &SSEMessage{}
 	lineCount := 0
 	lastPos := 0
@@ -185,6 +188,9 @@ func ParseSSEMessage(data []byte) (*SSEMessage, []byte, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return nil, nil, fmt.Errorf("SSE message line exceeds maximum token size (32MB): %w", err)
+		}
 		return nil, nil, fmt.Errorf("error scanning SSE data: %v", err)
 	}
 

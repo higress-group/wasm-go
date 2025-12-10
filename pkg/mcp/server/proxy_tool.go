@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -73,6 +74,9 @@ func NewMcpProtocolHandler(backendURL string, timeout int) *McpProtocolHandler {
 // parseSSEResponse parses Server-Sent Events format and extracts data field content
 func parseSSEResponse(sseData []byte) ([]byte, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(sseData))
+	// Set max token size to 32MB to handle large messages
+	maxTokenSize := 32 * 1024 * 1024 // 32MB
+	scanner.Buffer(make([]byte, 0, 64*1024), maxTokenSize)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -90,6 +94,9 @@ func parseSSEResponse(sseData []byte) ([]byte, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return nil, fmt.Errorf("SSE response line exceeds maximum token size (32MB): %w", err)
+		}
 		return nil, fmt.Errorf("error reading SSE data: %v", err)
 	}
 

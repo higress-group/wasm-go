@@ -677,6 +677,7 @@ func Initialize() {
 		wrapper.ProcessRequestBody(onHttpRequestBody),
 		wrapper.ProcessResponseHeaders(onHttpResponseHeaders),
 		wrapper.ProcessStreamingResponseBody(onHttpStreamingResponseBody),
+		wrapper.WithRebuildMaxMemBytes[McpServerConfig](200*1024*1024),
 	)
 }
 
