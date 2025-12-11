@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
@@ -114,7 +116,11 @@ type RedisClusterClient[C Cluster] struct {
 }
 
 type redisOption struct {
-	dataBase int
+	dataBase                    int
+	bufferFlushTimeout          int  // in milliseconds, default 3ms when not set
+	maxBufferSizeBeforeFlush    int  // in bytes, default 1024 bytes when not set
+	bufferFlushTimeoutSet       bool // flag to indicate if bufferFlushTimeout was explicitly set
+	maxBufferSizeBeforeFlushSet bool // flag to indicate if maxBufferSizeBeforeFlush was explicitly set
 }
 
 type optionFunc func(*redisOption)
@@ -122,6 +128,32 @@ type optionFunc func(*redisOption)
 func WithDataBase(dataBase int) optionFunc {
 	return func(o *redisOption) {
 		o.dataBase = dataBase
+	}
+}
+
+func WithBufferFlushTimeout(timeout time.Duration) optionFunc {
+	return func(o *redisOption) {
+		o.bufferFlushTimeout = int(timeout.Milliseconds())
+		o.bufferFlushTimeoutSet = true
+	}
+}
+
+func WithMaxBufferSizeBeforeFlush(size int) optionFunc {
+	return func(o *redisOption) {
+		o.maxBufferSizeBeforeFlush = size
+		o.maxBufferSizeBeforeFlushSet = true
+	}
+}
+
+// WithDisableBuffer is a convenience function that disables all buffering by setting
+// both buffer_flush_timeout and max_buffer_size_before_flush to 0.
+// This is useful for latency-sensitive scenarios where immediate query execution is required.
+func WithDisableBuffer() optionFunc {
+	return func(o *redisOption) {
+		o.bufferFlushTimeout = 0
+		o.bufferFlushTimeoutSet = true
+		o.maxBufferSizeBeforeFlush = 0
+		o.maxBufferSizeBeforeFlushSet = true
 	}
 }
 
@@ -221,12 +253,42 @@ func (c *RedisClusterClient[C]) Ready() bool {
 }
 
 func (c *RedisClusterClient[C]) Init(username, password string, timeout int64, opts ...optionFunc) error {
+	// Apply user options
 	for _, opt := range opts {
 		opt(&c.option)
 	}
+
 	clusterName := c.cluster.ClusterName()
+
+	// Build query parameters based on options
+	params := make([]string, 0, 3)
+
+	// Add database parameter if configured
 	if c.option.dataBase != 0 {
-		clusterName = fmt.Sprintf("%s?db=%d", clusterName, c.option.dataBase)
+		params = append(params, fmt.Sprintf("db=%d", c.option.dataBase))
+	}
+
+	// Add buffer_flush_timeout parameter
+	// Default: 3ms if not explicitly set by user
+	// If explicitly set to 0, use 0 (disable timeout-based flushing)
+	bufferTimeout := c.option.bufferFlushTimeout
+	if !c.option.bufferFlushTimeoutSet {
+		bufferTimeout = 3 // default 3ms when not configured
+	}
+	params = append(params, fmt.Sprintf("buffer_flush_timeout=%d", bufferTimeout))
+
+	// Add max_buffer_size_before_flush parameter
+	// Default: 1024 bytes if not explicitly set by user
+	// If explicitly set to 0, use 0 (disable buffering, send immediately)
+	bufferSize := c.option.maxBufferSizeBeforeFlush
+	if !c.option.maxBufferSizeBeforeFlushSet {
+		bufferSize = 1024 // default 1024 bytes when not configured
+	}
+	params = append(params, fmt.Sprintf("max_buffer_size_before_flush=%d", bufferSize))
+
+	// Append all parameters to cluster name
+	if len(params) > 0 {
+		clusterName = fmt.Sprintf("%s?%s", clusterName, strings.Join(params, "&"))
 	}
 
 	// Always set checkReadyFunc to support re-authentication
