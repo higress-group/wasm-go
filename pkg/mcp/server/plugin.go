@@ -509,20 +509,26 @@ func parseConfigCore(configJson gjson.Result, config *McpServerConfig, opts *Con
 		return nil
 	}
 	config.methodHandlers["initialize"] = func(ctx wrapper.HttpContext, id utils.JsonRpcID, params gjson.Result) error {
-		version := params.Get("protocolVersion").String()
-		if version == "" {
-			utils.OnMCPResponseError(ctx, errors.New("unsupported protocol version"), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
+		requestedVersion := params.Get("protocolVersion").String()
+		if requestedVersion == "" {
+			utils.OnMCPResponseError(ctx, errors.New("protocolVersion is required"), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
 			return nil
 		}
 
-		// Support for multiple protocol versions including 2025-06-18
-		if !slices.Contains(SupportedMCPVersions, version) {
-			utils.OnMCPResponseError(ctx, fmt.Errorf("unsupported protocol version: %s", version), utils.ErrInvalidParams, fmt.Sprintf("mcp:%s:initialize:error", currentServerNameForHandlers))
-			return nil
+		// MCP specification compliant version negotiation:
+		// If the server supports the requested protocol version, it MUST respond with the same version.
+		// Otherwise, the server MUST respond with another protocol version it supports.
+		// This SHOULD be the latest version supported by the server.
+		negotiatedVersion := requestedVersion
+		if !slices.Contains(SupportedMCPVersions, requestedVersion) {
+			// Return the latest supported version instead of rejecting the request
+			negotiatedVersion = SupportedMCPVersions[len(SupportedMCPVersions)-1]
+			log.Warnf("Client requested unsupported version %s, responding with latest supported version %s",
+				requestedVersion, negotiatedVersion)
 		}
 
 		utils.OnMCPResponseSuccess(ctx, map[string]any{
-			"protocolVersion": version,
+			"protocolVersion": negotiatedVersion,
 			"capabilities": map[string]any{
 				"tools": map[string]any{},
 			},
