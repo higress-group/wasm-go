@@ -10,6 +10,21 @@ import (
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 )
 
+// headerOption holds options for CallOnHttpRequestHeaders and CallOnHttpResponseHeaders
+type headerOption struct {
+	endOfStream bool
+}
+
+// HeaderOptionFunc is a function that configures headerOption
+type HeaderOptionFunc func(*headerOption)
+
+// WithEndOfStream sets the endOfStream flag for header calls.
+func WithEndOfStream(endOfStream bool) HeaderOptionFunc {
+	return func(o *headerOption) {
+		o.endOfStream = endOfStream
+	}
+}
+
 // TestHost is the interface for the test host.
 // unit test can call onHttpRequestHeaders etc. to mock the host calls.
 // TestHost mock the behavior of the envoy host proxy with the wasm plugin.
@@ -17,13 +32,13 @@ type TestHost interface {
 	// HostEmulator is the interface for the host emulator.
 	proxytest.HostEmulator
 	// CallOnHttpRequestHeaders call the onHttpRequestHeaders method in the wasm plugin.
-	CallOnHttpRequestHeaders(headers [][2]string) types.Action
+	CallOnHttpRequestHeaders(headers [][2]string, opts ...HeaderOptionFunc) types.Action
 	// CallOnHttpRequestBody call the onHttpRequestBody method in the wasm plugin.
 	CallOnHttpRequestBody(body []byte) types.Action
 	// CallOnHttpStreamingRequestBody call the onHttpRequestBody method in the wasm plugin.
 	CallOnHttpStreamingRequestBody(body []byte, endOfStream bool) types.Action
 	// CallOnHttpResponseHeaders call the onHttpResponseHeaders method in the wasm plugin.
-	CallOnHttpResponseHeaders(headers [][2]string) types.Action
+	CallOnHttpResponseHeaders(headers [][2]string, opts ...HeaderOptionFunc) types.Action
 	// CallOnHttpStreamingResponseBody call the onHttpResponseBody method in the wasm plugin.
 	CallOnHttpStreamingResponseBody(body []byte, endOfStream bool) types.Action
 	// CallOnHttpResponseBody call the onHttpResponseBody method in the wasm plugin.
@@ -139,11 +154,20 @@ func (h *testHost) CompleteHttp() {
 }
 
 // CallOnHttpRequestHeaders call the onHttpRequestHeaders method in the wasm plugin.
-func (h *testHost) CallOnHttpRequestHeaders(headers [][2]string) types.Action {
+// By default, endOfStream is false (indicating a body will follow).
+func (h *testHost) CallOnHttpRequestHeaders(headers [][2]string, opts ...HeaderOptionFunc) types.Action {
 	if !h.currentContextValid {
 		h.InitHttp()
 	}
-	action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, headers, false)
+
+	option := &headerOption{
+		endOfStream: false,
+	}
+	for _, opt := range opts {
+		opt(option)
+	}
+
+	action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, headers, option.endOfStream)
 	return action
 }
 
@@ -183,9 +207,18 @@ func (h *testHost) CallOnHttpStreamingResponseBody(body []byte, endOfStream bool
 }
 
 // CallOnHttpResponseHeaders call the onHttpResponseHeaders method in the wasm plugin.
-func (h *testHost) CallOnHttpResponseHeaders(headers [][2]string) types.Action {
+// By default, endOfStream is false (indicating a body will follow).
+func (h *testHost) CallOnHttpResponseHeaders(headers [][2]string, opts ...HeaderOptionFunc) types.Action {
 	h.ensureContextInitialized()
-	action := h.HostEmulator.CallOnResponseHeaders(h.currentContextID, headers, false)
+
+	option := &headerOption{
+		endOfStream: false,
+	}
+	for _, opt := range opts {
+		opt(option)
+	}
+
+	action := h.HostEmulator.CallOnResponseHeaders(h.currentContextID, headers, option.endOfStream)
 	return action
 }
 
