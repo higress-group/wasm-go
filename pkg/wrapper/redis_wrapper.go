@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"time"
 
@@ -291,12 +292,18 @@ func (c *RedisClusterClient[C]) Init(username, password string, timeout int64, o
 		clusterName = fmt.Sprintf("%s?%s", clusterName, strings.Join(params, "&"))
 	}
 
+	// URL encode username and password to handle special characters like '?', '@', '#', '&'
+	// These characters may be incorrectly parsed as URL separators by the underlying Envoy Redis client
+	// See: https://github.com/alibaba/higress/issues/2267
+	encodedUsername := url.QueryEscape(username)
+	encodedPassword := url.QueryEscape(password)
+
 	// Always set checkReadyFunc to support re-authentication
 	c.checkReadyFunc = func() error {
 		if c.ready {
 			return nil
 		}
-		initErr := proxywasm.RedisInit(clusterName, username, password, uint32(timeout))
+		initErr := proxywasm.RedisInit(clusterName, encodedUsername, encodedPassword, uint32(timeout))
 		if initErr != nil {
 			proxywasm.LogErrorf("failed to re-authenticate redis: %v", initErr)
 			return initErr
@@ -306,7 +313,7 @@ func (c *RedisClusterClient[C]) Init(username, password string, timeout int64, o
 		return nil
 	}
 
-	err := proxywasm.RedisInit(clusterName, username, password, uint32(timeout))
+	err := proxywasm.RedisInit(clusterName, encodedUsername, encodedPassword, uint32(timeout))
 	if err != nil {
 		proxywasm.LogWarnf("failed to init redis: %v, will retry later", err)
 		c.ready = false
