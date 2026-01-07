@@ -91,6 +91,7 @@ type CommonVmCtx[PluginConfig any] struct {
 	rebuildAfterRequests        uint64 // Number of requests after which to trigger rebuild
 	requestCount                uint64 // Current request count
 	rebuildMaxMem               uint64 // Maximum memory size in bytes before triggering rebuild
+	maxRequestsPerIoCycle       uint64 // Maximum concurrent requests per IO cycle (0 means not set)
 }
 
 type TickFuncEntry struct {
@@ -436,6 +437,49 @@ func WithRebuildMaxMemBytes[PluginConfig any](memSizeBytes uint64) CtxOption[Plu
 	return &rebuildMaxMemOption[PluginConfig]{rebuildMaxMem: memSizeBytes}
 }
 
+type maxRequestsPerIoCycleOption[PluginConfig any] struct {
+	maxRequestsPerIoCycle uint64
+}
+
+func (o *maxRequestsPerIoCycleOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
+	ctx.maxRequestsPerIoCycle = o.maxRequestsPerIoCycle
+}
+
+// WithMaxRequestsPerIoCycle sets the global max requests per IO cycle.
+// This controls how many concurrent requests can be processed in a single IO cycle.
+// The setting is applied during plugin start via the "set_global_max_requests_per_io_cycle" foreign function.
+//
+// Background:
+// When plugin logic is complex, external call callbacks (HTTP/Redis) may timeout within the current
+// IO cycle even if the backend has already returned a response quickly. This is because the plugin
+// execution blocks the IO cycle from processing the callback in time.
+//
+// Recommendation:
+// For plugins with complex logic that need to make external calls (HTTP/Redis), it is recommended
+// to use this setting to limit concurrent requests per IO cycle.
+//
+// Important notes:
+//   - This setting takes effect GLOBALLY, not just for the current plugin.
+//   - When multiple plugins set this value, the SMALLEST limit will take effect.
+//   - Setting this value too small may cause additional CPU overhead.
+//   - Recommended value = external call timeout / total plugin logic execution time across all plugins
+//
+// maxRequests: The maximum number of requests per IO cycle (e.g., 20)
+func WithMaxRequestsPerIoCycle[PluginConfig any](maxRequests uint64) CtxOption[PluginConfig] {
+	return &maxRequestsPerIoCycleOption[PluginConfig]{maxRequestsPerIoCycle: maxRequests}
+}
+
+// setGlobalMaxRequestsPerIoCycle sets the global max requests per IO cycle via foreign function call.
+func setGlobalMaxRequestsPerIoCycle(maxRequests uint64) error {
+	param := make([]byte, 8)
+	binary.LittleEndian.PutUint64(param, maxRequests)
+	_, err := proxywasm.CallForeignFunction("set_global_max_requests_per_io_cycle", param)
+	if err != nil {
+		return fmt.Errorf("set global max requests failed: %w", err)
+	}
+	return nil
+}
+
 type prePluginOption[PluginConfig any] struct {
 	f onPluginStartOrReload
 }
@@ -597,6 +641,14 @@ func (ctx *CommonPluginCtx[PluginConfig]) OnPluginStart(int) types.OnPluginStart
 		if err != nil {
 			log.Errorf("prePluginStartOrReload hook failed: %v", err)
 			return types.OnPluginStartStatusFailed
+		}
+	}
+	// Set max requests per IO cycle if configured
+	if ctx.vm.maxRequestsPerIoCycle > 0 {
+		if err := setGlobalMaxRequestsPerIoCycle(ctx.vm.maxRequestsPerIoCycle); err != nil {
+			log.Warnf("set global max requests per IO cycle failed: %v", err)
+		} else {
+			log.Infof("set global max requests per IO cycle to %d", ctx.vm.maxRequestsPerIoCycle)
 		}
 	}
 	data, err := proxywasm.GetPluginConfiguration()
