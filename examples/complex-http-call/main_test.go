@@ -57,7 +57,7 @@ func TestComplexHttpCall(t *testing.T) {
 		elapsed := time.Since(startTime)
 
 		t.Logf("Plugin request headers processing took: %v", elapsed)
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.ActionPause, action)
 
 		// 5. Verify outbound HTTP call was made
 		httpCallouts := host.GetHttpCalloutAttributes()
@@ -151,7 +151,7 @@ func TestComplexHttpCallWithDifferentLoops(t *testing.T) {
 				elapsed := time.Since(startTime)
 
 				t.Logf("Plugin with loops=%d took: %v", tc.loops, elapsed)
-				require.Equal(t, types.ActionContinue, action)
+				require.Equal(t, types.ActionPause, action)
 
 				// Verify the HTTP call was still made
 				httpCallouts := host.GetHttpCalloutAttributes()

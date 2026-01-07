@@ -134,6 +134,9 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config HttpCallConfig) types.
 		proxywasm.AddHttpRequestHeader("X-External-Response", string(responseBody))
 		proxywasm.AddHttpRequestHeader("X-Computation-Time-Ms", fmt.Sprintf("%d", computeElapsed.Milliseconds()))
 		proxywasm.AddHttpRequestHeader("X-Http-Call-Time-Ms", fmt.Sprintf("%d", httpCallElapsed.Milliseconds()))
+
+		// Resume the paused request
+		proxywasm.ResumeHttpRequest()
 	}, uint32(config.timeout))
 
 	if err != nil {
@@ -141,5 +144,6 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config HttpCallConfig) types.
 		return types.ActionContinue
 	}
 
-	return types.ActionContinue
+	// Pause request processing until HTTP call completes
+	return types.ActionPause
 }

@@ -72,6 +72,8 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config HttpCallConfig) types.
 		log.Infof("HTTP call response: status=%d, body=%s", statusCode, string(responseBody))
 		// Add response to request headers for downstream
 		proxywasm.AddHttpRequestHeader("X-External-Response", string(responseBody))
+		// Resume the paused request
+		proxywasm.ResumeHttpRequest()
 	}, 5000) // 5 second timeout
 
 	if err != nil {
