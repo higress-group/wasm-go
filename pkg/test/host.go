@@ -105,6 +105,13 @@ func (h *testHost) Reset() {
 
 // NewTestHost create a new test host with config in json format.
 func NewTestHost(config json.RawMessage) (TestHost, types.OnPluginStartStatus) {
+	return NewTestHostWithForeignFuncs(config, nil)
+}
+
+// NewTestHostWithForeignFuncs create a new test host with config and foreign functions.
+// foreignFuncs is a map of foreign function name to the function implementation.
+// This is useful for testing plugins that call foreign functions like "set_global_max_requests_per_io_cycle".
+func NewTestHostWithForeignFuncs(config json.RawMessage, foreignFuncs map[string]func([]byte) []byte) (TestHost, types.OnPluginStartStatus) {
 	// if wasmInitVMContext is not set, set it to the commonVMContext.
 	if getWasmInitVMContext() == nil {
 		setWasmInitVMContext(proxywasm.GetVMContext())
@@ -119,6 +126,12 @@ func NewTestHost(config json.RawMessage) (TestHost, types.OnPluginStartStatus) {
 		WithVMContext(testVMContext)
 
 	host, reset := proxytest.NewHostEmulator(opt)
+
+	// register foreign functions before starting the plugin.
+	for name, f := range foreignFuncs {
+		host.RegisterForeignFunction(name, f)
+	}
+
 	// start the plugin.
 	status := host.StartPlugin()
 	// create a new test host with the host emulator and the reset function.

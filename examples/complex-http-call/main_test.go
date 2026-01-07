@@ -37,8 +37,10 @@ func TestComplexHttpCall(t *testing.T) {
 			"timeout": 5000
 		}`)
 
-		// 2. Create test host
-		host, status := test.NewTestHost(config)
+		// 2. Create test host with foreign function registered
+		host, status := test.NewTestHostWithForeignFuncs(config, map[string]func([]byte) []byte{
+			"set_global_max_requests_per_io_cycle": func(b []byte) []byte { return b },
+		})
 		require.Equal(t, types.OnPluginStartStatusOK, status)
 		defer host.Reset()
 
@@ -55,7 +57,7 @@ func TestComplexHttpCall(t *testing.T) {
 		elapsed := time.Since(startTime)
 
 		t.Logf("Plugin request headers processing took: %v", elapsed)
-		require.Equal(t, types.ActionPause, action)
+		require.Equal(t, types.ActionContinue, action)
 
 		// 5. Verify outbound HTTP call was made
 		httpCallouts := host.GetHttpCalloutAttributes()
@@ -132,7 +134,9 @@ func TestComplexHttpCallWithDifferentLoops(t *testing.T) {
 					"timeout": 5000
 				}`, tc.loops))
 
-				host, status := test.NewTestHost(config)
+				host, status := test.NewTestHostWithForeignFuncs(config, map[string]func([]byte) []byte{
+					"set_global_max_requests_per_io_cycle": func(b []byte) []byte { return b },
+				})
 				require.Equal(t, types.OnPluginStartStatusOK, status)
 				defer host.Reset()
 
@@ -147,7 +151,7 @@ func TestComplexHttpCallWithDifferentLoops(t *testing.T) {
 				elapsed := time.Since(startTime)
 
 				t.Logf("Plugin with loops=%d took: %v", tc.loops, elapsed)
-				require.Equal(t, types.ActionPause, action)
+				require.Equal(t, types.ActionContinue, action)
 
 				// Verify the HTTP call was still made
 				httpCallouts := host.GetHttpCalloutAttributes()
