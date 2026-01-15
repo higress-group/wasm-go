@@ -740,6 +740,10 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types
 	ctx.SetRequestBodyBufferLimit(DefaultMaxBodyBytes)
 	ctx.SetResponseBodyBufferLimit(DefaultMaxBodyBytes)
 
+	// Remove accept-encoding header to prevent backend from compressing the response
+	// This ensures we can properly process and modify the response body
+	proxywasm.RemoveHttpRequestHeader("accept-encoding")
+
 	// Parse MCP-Protocol-Version header and store in context
 	// This allows clients to specify the MCP protocol version via HTTP header
 	// instead of only through the JSON-RPC initialize method
