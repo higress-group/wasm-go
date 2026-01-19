@@ -38,12 +38,6 @@ type DefaultLog struct {
 }
 
 func (l *DefaultLog) log(level LogLevel, msg string) {
-	requestIDRaw, _ := proxywasm.GetProperty([]string{"x_request_id"})
-	requestID := string(requestIDRaw)
-	if requestID == "" {
-		requestID = "nil"
-	}
-	msg = fmt.Sprintf("[%s] [%s] [%s] %s", l.pluginName, l.pluginID, requestID, msg)
 	value, err := proxywasm.CallForeignFunction("get_log_level", nil)
 	var envoyLogLevel LogLevel
 	if err != nil {
@@ -55,6 +49,12 @@ func (l *DefaultLog) log(level LogLevel, msg string) {
 	if level < envoyLogLevel {
 		return
 	}
+	requestIDRaw, _ := proxywasm.GetProperty([]string{"x_request_id"})
+	requestID := string(requestIDRaw)
+	if requestID == "" {
+		requestID = "nil"
+	}
+	msg = fmt.Sprintf("[%s] [%s] [%s] %s", l.pluginName, l.pluginID, requestID, msg)
 	switch level {
 	case LogLevelTrace:
 		proxywasm.LogTrace(msg)
@@ -72,6 +72,17 @@ func (l *DefaultLog) log(level LogLevel, msg string) {
 }
 
 func (l *DefaultLog) logFormat(level LogLevel, format string, args ...interface{}) {
+	value, err := proxywasm.CallForeignFunction("get_log_level", nil)
+	var envoyLogLevel LogLevel
+	if err != nil {
+		proxywasm.LogErrorf("failed to call foreign function: %v", err)
+		envoyLogLevel = LogLevelTrace
+	} else {
+		envoyLogLevel = LogLevel(binary.LittleEndian.Uint32(value))
+	}
+	if level < envoyLogLevel {
+		return
+	}
 	requestIDRaw, _ := proxywasm.GetProperty([]string{"x_request_id"})
 	requestID := string(requestIDRaw)
 	if requestID == "" {
