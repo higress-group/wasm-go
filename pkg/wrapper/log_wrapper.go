@@ -41,7 +41,6 @@ func (l *DefaultLog) log(level LogLevel, msg string) {
 	value, err := proxywasm.CallForeignFunction("get_log_level", nil)
 	var envoyLogLevel LogLevel
 	if err != nil {
-		proxywasm.LogErrorf("failed to call foreign function: %v", err)
 		envoyLogLevel = LogLevelTrace
 	} else {
 		envoyLogLevel = LogLevel(binary.LittleEndian.Uint32(value))
@@ -75,7 +74,6 @@ func (l *DefaultLog) logFormat(level LogLevel, format string, args ...interface{
 	value, err := proxywasm.CallForeignFunction("get_log_level", nil)
 	var envoyLogLevel LogLevel
 	if err != nil {
-		proxywasm.LogErrorf("failed to call foreign function: %v", err)
 		envoyLogLevel = LogLevelTrace
 	} else {
 		envoyLogLevel = LogLevel(binary.LittleEndian.Uint32(value))
