@@ -427,36 +427,36 @@ func (h *McpProtocolHandler) executeToolsCall(ctx wrapper.HttpContext) error {
 			jsonResponseBody = responseBody
 		}
 
-		// Parse response to check for backend errors
-		var callResponse map[string]interface{}
-		if err := json.Unmarshal(jsonResponseBody, &callResponse); err == nil {
-			if result, hasResult := callResponse["result"]; hasResult {
-				if resultMap, ok := result.(map[string]interface{}); ok {
-					if isError, hasIsError := resultMap["isError"]; hasIsError && isError == true {
-						// Backend reported an error through isError flag
-						log.Warnf("Backend reported tool call error for %s", toolName)
-						// Still forward the response but with source attribution
-						h.wrapBackendError(jsonResponseBody, ctx)
-						return
-					}
-				}
-			}
-		}
-
-		// Parse response and forward to client
-		var finalResponse map[string]interface{}
-		if err := json.Unmarshal(jsonResponseBody, &finalResponse); err != nil {
-			log.Errorf("Failed to parse tools/call response: %v", err)
-			utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:tools/call:parse_error")
+		// Parse response and check for backend errors (single unmarshal)
+		parsedResponse, isError, errorType := ParseBackendResponse(jsonResponseBody)
+		if parsedResponse == nil {
+			log.Errorf("Failed to parse tools/call response")
+			utils.OnMCPResponseError(ctx, fmt.Errorf("invalid JSON response"), utils.ErrInternalError, "mcp-proxy:tools/call:parse_error")
 			return
 		}
 
-		// Forward the tools/call result
-		if result, hasResult := finalResponse["result"]; hasResult {
+		// Log backend errors for observability
+		if isError {
+			log.Warnf("Backend reported %s for %s", errorType, toolName)
+		}
+
+		// Forward the tools/call result (pass through both success and error responses)
+		if result, hasResult := parsedResponse["result"]; hasResult {
 			if resultMap, ok := result.(map[string]interface{}); ok {
 				utils.OnMCPResponseSuccess(ctx, resultMap, "mcp-proxy:tools/call:success")
 			} else {
 				utils.OnMCPResponseError(ctx, fmt.Errorf("invalid tools/call result type"), utils.ErrInternalError, "mcp-proxy:tools/call:invalid_type")
+			}
+		} else if errorField, hasError := parsedResponse["error"]; hasError {
+			// Pass through JSON-RPC error as MCP error
+			if errorMap, ok := errorField.(map[string]interface{}); ok {
+				errorMsg := "Backend error"
+				if msg, hasMsg := errorMap["message"]; hasMsg {
+					errorMsg = fmt.Sprintf("%v", msg)
+				}
+				utils.OnMCPResponseError(ctx, fmt.Errorf("%s", errorMsg), utils.ErrInternalError, "mcp-proxy:tools/call:backend_error")
+			} else {
+				utils.OnMCPResponseError(ctx, fmt.Errorf("backend error"), utils.ErrInternalError, "mcp-proxy:tools/call:backend_error")
 			}
 		} else {
 			utils.OnMCPResponseError(ctx, fmt.Errorf("invalid tools/call response"), utils.ErrInternalError, "mcp-proxy:tools/call:invalid_response")
@@ -624,57 +624,35 @@ func (h *McpProtocolHandler) createToolsCallRequest(toolName string, arguments m
 	}
 }
 
-// wrapBackendError wraps backend errors with source attribution
-func (h *McpProtocolHandler) wrapBackendError(originalResponse []byte, ctx wrapper.HttpContext) {
-	var response map[string]interface{}
-	if err := json.Unmarshal(originalResponse, &response); err != nil {
-		log.Errorf("Failed to parse backend error response: %v", err)
-		utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:error:parse_failure")
-		return
+// ParseBackendResponse parses the response body and checks if it's a backend error
+// Returns the parsed response, whether it's an error, and the error type
+func ParseBackendResponse(responseBody []byte) (response map[string]interface{}, isError bool, errorType string) {
+	if err := json.Unmarshal(responseBody, &response); err != nil {
+		return nil, false, ""
 	}
 
-	// Add source attribution to error data
+	// Check for JSON-RPC 2.0 error format (top-level error field)
+	if _, hasError := response["error"]; hasError {
+		return response, true, "jsonrpc_error"
+	}
+
+	// Check for error in result.isError format
 	if result, hasResult := response["result"]; hasResult {
 		if resultMap, ok := result.(map[string]interface{}); ok {
-			if content, hasContent := resultMap["content"]; hasContent {
-				if contentArray, ok := content.([]interface{}); ok && len(contentArray) > 0 {
-					if textContent, ok := contentArray[0].(map[string]interface{}); ok {
-						if text, hasText := textContent["text"]; hasText {
-							// Wrap the error text to indicate backend source
-							wrappedText := fmt.Sprintf("Backend error: %v", text)
-							textContent["text"] = wrappedText
-						}
-					}
-				}
+			if isErr, hasIsError := resultMap["isError"]; hasIsError && isErr == true {
+				return response, true, "result_isError"
 			}
 		}
 	}
 
-	// Send wrapped response
-	wrappedResponse, err := json.Marshal(response)
-	if err != nil {
-		log.Errorf("Failed to marshal wrapped error response: %v", err)
-		utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:error:marshal_failure")
-		return
-	}
+	return response, false, ""
+}
 
-	// Parse and forward wrapped response
-	var wrappedResult map[string]interface{}
-	if err := json.Unmarshal(wrappedResponse, &wrappedResult); err != nil {
-		log.Errorf("Failed to parse wrapped error response: %v", err)
-		utils.OnMCPResponseError(ctx, err, utils.ErrInternalError, "mcp-proxy:error:wrap_failure")
-		return
-	}
-
-	if result, hasResult := wrappedResult["result"]; hasResult {
-		if resultMap, ok := result.(map[string]interface{}); ok {
-			utils.OnMCPResponseSuccess(ctx, resultMap, "mcp-proxy:error:backend_wrapped")
-		} else {
-			utils.OnMCPResponseError(ctx, fmt.Errorf("invalid wrapped result type"), utils.ErrInternalError, "mcp-proxy:error:wrap_failure")
-		}
-	} else {
-		utils.OnMCPResponseError(ctx, fmt.Errorf("wrapped response parse error"), utils.ErrInternalError, "mcp-proxy:error:wrap_failure")
-	}
+// IsBackendError checks if the response is a backend error (JSON-RPC 2.0 error or result.isError)
+// Returns true if it's an error response, and the error type ("jsonrpc_error" or "result_isError")
+func IsBackendError(responseBody []byte) (isError bool, errorType string) {
+	_, isError, errorType = ParseBackendResponse(responseBody)
+	return isError, errorType
 }
 
 // McpSession represents a temporary MCP session

@@ -372,4 +372,114 @@ id: 123
 	}
 }
 
+// TestIsBackendError tests detection of backend error responses
+func TestIsBackendError(t *testing.T) {
+	tests := []struct {
+		name          string
+		response      string
+		expectError   bool
+		expectErrType string
+	}{
+		{
+			name: "JSON-RPC 2.0 error with unknown tool",
+			response: `{
+				"jsonrpc": "2.0",
+				"id": 3,
+				"error": {
+					"code": -32602,
+					"message": "Unknown tool: invalid_tool_name"
+				}
+			}`,
+			expectError:   true,
+			expectErrType: "jsonrpc_error",
+		},
+		{
+			name: "JSON-RPC 2.0 error with method not found",
+			response: `{
+				"jsonrpc": "2.0",
+				"id": 1,
+				"error": {
+					"code": -32601,
+					"message": "Method not found"
+				}
+			}`,
+			expectError:   true,
+			expectErrType: "jsonrpc_error",
+		},
+		{
+			name: "result.isError format",
+			response: `{
+				"jsonrpc": "2.0",
+				"id": 3,
+				"result": {
+					"isError": true,
+					"content": [
+						{
+							"type": "text",
+							"text": "Tool execution failed: connection timeout"
+						}
+					]
+				}
+			}`,
+			expectError:   true,
+			expectErrType: "result_isError",
+		},
+		{
+			name: "successful response with result",
+			response: `{
+				"jsonrpc": "2.0",
+				"id": 3,
+				"result": {
+					"content": [
+						{
+							"type": "text",
+							"text": "Success!"
+						}
+					]
+				}
+			}`,
+			expectError:   false,
+			expectErrType: "",
+		},
+		{
+			name: "successful response with isError false",
+			response: `{
+				"jsonrpc": "2.0",
+				"id": 3,
+				"result": {
+					"isError": false,
+					"content": [
+						{
+							"type": "text",
+							"text": "Success!"
+						}
+					]
+				}
+			}`,
+			expectError:   false,
+			expectErrType: "",
+		},
+		{
+			name:          "invalid JSON",
+			response:      `{invalid json}`,
+			expectError:   false,
+			expectErrType: "",
+		},
+		{
+			name:          "empty response",
+			response:      `{}`,
+			expectError:   false,
+			expectErrType: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isError, errType := IsBackendError([]byte(tt.response))
+			assert.Equal(t, tt.expectError, isError, "isError mismatch")
+			assert.Equal(t, tt.expectErrType, errType, "error type mismatch")
+		})
+	}
+}
+
 // ForwardToolsList is now implemented in proxy_server.go
