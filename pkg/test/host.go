@@ -1,6 +1,7 @@
 package test
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -131,6 +132,13 @@ func NewTestHostWithForeignFuncs(config json.RawMessage, foreignFuncs map[string
 	for name, f := range foreignFuncs {
 		host.RegisterForeignFunction(name, f)
 	}
+
+	host.RegisterForeignFunction("get_log_level", func(b []byte) []byte {
+		var val uint32 = 0
+		buf := make([]byte, 4)
+		binary.LittleEndian.PutUint32(buf, val)
+		return buf
+	})
 
 	// start the plugin.
 	status := host.StartPlugin()
