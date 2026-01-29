@@ -1259,6 +1259,9 @@ func recoverFunc() {
 		const size = 64 << 10
 		buf := make([]byte, size)
 		buf = buf[:runtime.Stack(buf, false)]
-		log.Errorf("recovered from panic %v, stack: %s", r, buf)
+		// Escape newlines to ensure the entire stack trace is printed on a single line,
+		// which prevents log collection systems from splitting the stack trace into multiple entries
+		escapedStack := strings.ReplaceAll(string(buf), "\n", "\\n")
+		log.Errorf("recovered from panic %v, stack: %s", r, escapedStack)
 	}
 }
