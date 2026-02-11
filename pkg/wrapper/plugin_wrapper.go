@@ -409,6 +409,29 @@ func WithLogger[PluginConfig any](logger log.Log) CtxOption[PluginConfig] {
 	return &logOption[PluginConfig]{logger}
 }
 
+type safeLogOption[PluginConfig any] struct{}
+
+func (o *safeLogOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
+	log.SetSafeLogEnabled(true)
+}
+
+// EnableSafeLog enables safe log mode to prevent logging sensitive information.
+// When enabled, sensitive logs such as HTTP request/response headers and bodies
+// from external service calls will be suppressed.
+//
+// Usage in plugin init:
+//
+//	func main() {
+//	    wrapper.SetCtx(
+//	        "my-plugin",
+//	        wrapper.ParseConfig(parseConfig),
+//	        wrapper.EnableSafeLog[PluginConfig](),
+//	    )
+//	}
+func EnableSafeLog[PluginConfig any]() CtxOption[PluginConfig] {
+	return &safeLogOption[PluginConfig]{}
+}
+
 type rebuildOption[PluginConfig any] struct {
 	rebuildAfterRequests uint64
 }
@@ -1208,7 +1231,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) RouteCall(method, rawURL string, headers
 	requestID := uuid.New().String()
 	ctx.responseCallback = func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 		callback(statusCode, responseHeaders, responseBody)
-		log.Infof("route call end, id:%s, code:%d, headers:%#v, body:%s", requestID, statusCode, responseHeaders, strings.ReplaceAll(string(responseBody), "\n", `\n`))
+		log.UnsafeInfof("route call end, id:%s, code:%d, headers:%#v, body:%s", requestID, statusCode, responseHeaders, strings.ReplaceAll(string(responseBody), "\n", `\n`))
 	}
 	originalMethod, _ := proxywasm.GetHttpRequestHeader(":method")
 	originalPath, _ := proxywasm.GetHttpRequestHeader(":path")
@@ -1243,7 +1266,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) RouteCall(method, rawURL string, headers
 	proxywasm.ReplaceHttpRequestBody(body)
 	reqHeaders, _ := proxywasm.GetHttpRequestHeaders()
 	clusterName, _ := proxywasm.GetProperty([]string{"cluster_name"})
-	log.Infof("route call start, id:%s, method:%s, url:%s, cluster:%s, headers:%#v, body:%s", requestID, method, rawURL, clusterName, reqHeaders, strings.ReplaceAll(string(body), "\n", `\n`))
+	log.UnsafeInfof("route call start, id:%s, method:%s, url:%s, cluster:%s, headers:%#v, body:%s", requestID, method, rawURL, clusterName, reqHeaders, strings.ReplaceAll(string(body), "\n", `\n`))
 	return nil
 }
 

@@ -32,8 +32,24 @@ type Log interface {
 
 var pluginLog Log
 
+// safeLogEnabled controls whether sensitive logs should be suppressed.
+// When enabled, UnsafeInfo/UnsafeInfof calls will be silently ignored.
+var safeLogEnabled bool
+
 func SetPluginLog(log Log) {
 	pluginLog = log
+}
+
+// SetSafeLogEnabled enables or disables safe log mode.
+// When safe log mode is enabled, sensitive logs (printed via UnsafeInfo/UnsafeInfof)
+// will be suppressed to prevent leaking sensitive information like headers and body content.
+func SetSafeLogEnabled(enabled bool) {
+	safeLogEnabled = enabled
+}
+
+// IsSafeLogEnabled returns whether safe log mode is currently enabled.
+func IsSafeLogEnabled() bool {
+	return safeLogEnabled
 }
 
 func Trace(msg string) {
@@ -82,4 +98,36 @@ func Critical(msg string) {
 
 func Criticalf(format string, args ...interface{}) {
 	pluginLog.Criticalf(format, args...)
+}
+
+// UnsafeInfo logs a message at Info level only if safe log mode is disabled.
+// Use this for sensitive information that should not be logged in production.
+func UnsafeInfo(msg string) {
+	if !safeLogEnabled {
+		pluginLog.Info(msg)
+	}
+}
+
+// UnsafeInfof logs a formatted message at Info level only if safe log mode is disabled.
+// Use this for sensitive information that should not be logged in production.
+func UnsafeInfof(format string, args ...interface{}) {
+	if !safeLogEnabled {
+		pluginLog.Infof(format, args...)
+	}
+}
+
+// UnsafeDebug logs a message at Debug level only if safe log mode is disabled.
+// Use this for sensitive information that should not be logged in production.
+func UnsafeDebug(msg string) {
+	if !safeLogEnabled {
+		pluginLog.Debug(msg)
+	}
+}
+
+// UnsafeDebugf logs a formatted message at Debug level only if safe log mode is disabled.
+// Use this for sensitive information that should not be logged in production.
+func UnsafeDebugf(format string, args ...interface{}) {
+	if !safeLogEnabled {
+		pluginLog.Debugf(format, args...)
+	}
 }
