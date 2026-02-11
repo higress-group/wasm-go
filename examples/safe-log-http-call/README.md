@@ -42,14 +42,21 @@ func init() {
 }
 ```
 
-## What Gets Suppressed
+## How It Works
 
-With safe log enabled, the following logs will NOT be printed:
+With safe log enabled, the following logs will be **downgraded from Info to Debug level**:
 
 - `http call start` - request headers, body, URL, cluster info
 - `http call end` - response headers, body, status code
 - `route call start` - request headers, body
 - `route call end` - response headers, body
+
+Additionally, newlines in the log messages are preserved (not escaped), so that line-based log collectors cannot capture the complete sensitive information in a single log entry.
+
+**Why downgrade to Debug?**
+- Info is the default log level in production
+- Debug logs are only visible when explicitly enabled by system administrators
+- Even if Debug is enabled, the multi-line output prevents log collectors from capturing complete sensitive data
 
 ## Build
 

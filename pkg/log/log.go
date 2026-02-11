@@ -14,6 +14,11 @@
 
 package log
 
+import (
+	"fmt"
+	"strings"
+)
+
 type Log interface {
 	Trace(msg string)
 	Tracef(format string, args ...interface{})
@@ -100,34 +105,33 @@ func Criticalf(format string, args ...interface{}) {
 	pluginLog.Criticalf(format, args...)
 }
 
-// UnsafeInfo logs a message at Info level only if safe log mode is disabled.
-// Use this for sensitive information that should not be logged in production.
+// UnsafeInfo logs a message at Info level when safe log mode is disabled.
+// When safe log mode is enabled, the message is downgraded to Debug level
+// with newlines preserved (not escaped), so that line-based log collectors
+// cannot capture the complete sensitive information.
 func UnsafeInfo(msg string) {
-	if !safeLogEnabled {
+	if safeLogEnabled {
+		// In safe mode, downgrade to Debug level and preserve newlines
+		// to prevent log collectors from capturing complete sensitive data
+		msg = strings.ReplaceAll(msg, `\n`, "\n")
+		pluginLog.Debug(msg)
+	} else {
 		pluginLog.Info(msg)
 	}
 }
 
-// UnsafeInfof logs a formatted message at Info level only if safe log mode is disabled.
-// Use this for sensitive information that should not be logged in production.
+// UnsafeInfof logs a formatted message at Info level when safe log mode is disabled.
+// When safe log mode is enabled, the message is downgraded to Debug level
+// with newlines preserved (not escaped), so that line-based log collectors
+// cannot capture the complete sensitive information.
 func UnsafeInfof(format string, args ...interface{}) {
-	if !safeLogEnabled {
-		pluginLog.Infof(format, args...)
-	}
-}
-
-// UnsafeDebug logs a message at Debug level only if safe log mode is disabled.
-// Use this for sensitive information that should not be logged in production.
-func UnsafeDebug(msg string) {
-	if !safeLogEnabled {
+	if safeLogEnabled {
+		// In safe mode, downgrade to Debug level and preserve newlines
+		// to prevent log collectors from capturing complete sensitive data
+		msg := fmt.Sprintf(format, args...)
+		msg = strings.ReplaceAll(msg, `\n`, "\n")
 		pluginLog.Debug(msg)
-	}
-}
-
-// UnsafeDebugf logs a formatted message at Debug level only if safe log mode is disabled.
-// Use this for sensitive information that should not be logged in production.
-func UnsafeDebugf(format string, args ...interface{}) {
-	if !safeLogEnabled {
-		pluginLog.Debugf(format, args...)
+	} else {
+		pluginLog.Infof(format, args...)
 	}
 }
