@@ -14,11 +14,6 @@
 
 package log
 
-import (
-	"fmt"
-	"strings"
-)
-
 type Log interface {
 	Trace(msg string)
 	Tracef(format string, args ...interface{})
@@ -107,14 +102,13 @@ func Criticalf(format string, args ...interface{}) {
 
 // UnsafeInfo logs a message at Info level when safe log mode is disabled.
 // When safe log mode is enabled, the message is downgraded to Debug level
-// with newlines preserved (not escaped), so that line-based log collectors
-// cannot capture the complete sensitive information.
+// with a leading newline, so that line-based log collectors cannot capture
+// the complete sensitive information in a single entry.
 func UnsafeInfo(msg string) {
 	if safeLogEnabled {
-		// In safe mode, downgrade to Debug level and preserve newlines
+		// In safe mode, downgrade to Debug level with leading newline
 		// to prevent log collectors from capturing complete sensitive data
-		msg = strings.ReplaceAll(msg, `\n`, "\n")
-		pluginLog.Debug(msg)
+		pluginLog.Debug("\n" + msg)
 	} else {
 		pluginLog.Info(msg)
 	}
@@ -122,15 +116,13 @@ func UnsafeInfo(msg string) {
 
 // UnsafeInfof logs a formatted message at Info level when safe log mode is disabled.
 // When safe log mode is enabled, the message is downgraded to Debug level
-// with newlines preserved (not escaped), so that line-based log collectors
-// cannot capture the complete sensitive information.
+// with a leading newline, so that line-based log collectors cannot capture
+// the complete sensitive information in a single entry.
 func UnsafeInfof(format string, args ...interface{}) {
 	if safeLogEnabled {
-		// In safe mode, downgrade to Debug level and preserve newlines
+		// In safe mode, downgrade to Debug level with leading newline
 		// to prevent log collectors from capturing complete sensitive data
-		msg := fmt.Sprintf(format, args...)
-		msg = strings.ReplaceAll(msg, `\n`, "\n")
-		pluginLog.Debug(msg)
+		pluginLog.Debugf("\n"+format, args...)
 	} else {
 		pluginLog.Infof(format, args...)
 	}
