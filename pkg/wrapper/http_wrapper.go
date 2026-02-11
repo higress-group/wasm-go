@@ -23,6 +23,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
+
+	"github.com/higress-group/wasm-go/pkg/log"
 )
 
 type ResponseCallback func(statusCode int, responseHeaders http.Header, responseBody []byte)
@@ -140,12 +142,12 @@ func HttpCall(cluster Cluster, method, rawURL string, headers [][2]string, body 
 			}
 			headers.Add(h[0], h[1])
 		}
-		proxywasm.LogInfof("http call end, id: %s, code: %d, normal: %t, body: %s",
+		log.UnsafeInfof("http call end, id: %s, code: %d, normal: %t, body: %s",
 			requestID, code, normalResponse, strings.ReplaceAll(string(respBody), "\n", `\n`))
 		callback(code, headers, respBody)
 	})
 	if err == nil {
-		proxywasm.LogInfof("http call start, id: %s, cluster: %s, method: %s, url: %s, headers: %#v, body: %s, timeout: %d",
+		log.UnsafeInfof("http call start, id: %s, cluster: %s, method: %s, url: %s, headers: %#v, body: %s, timeout: %d",
 			requestID, cluster.ClusterName(), method, rawURL, headers, strings.ReplaceAll(string(body), "\n", `\n`), timeout)
 	}
 	return err
