@@ -764,6 +764,15 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config McpServerConfig) types
 		proxywasm.SendHttpResponseWithDetail(405, "not_support_sse_on_this_endpoint", nil, nil, -1)
 		return types.HeaderStopAllIterationAndWatermark
 	}
+	// Handle DELETE request for session termination (MCP 2025-06-18 spec)
+	// Per spec: "Clients that no longer need a particular session SHOULD send an HTTP DELETE
+	// to the MCP endpoint with the Mcp-Session-Id header, to explicitly terminate the session."
+	// Per spec: "The server MAY respond to this request with HTTP 405 Method Not Allowed,
+	// indicating that the server does not allow clients to terminate sessions."
+	if ctx.Method() == "DELETE" {
+		proxywasm.SendHttpResponseWithDetail(405, "session_termination_not_supported", nil, nil, -1)
+		return types.HeaderStopAllIterationAndWatermark
+	}
 	if !ctx.HasRequestBody() {
 		proxywasm.SendHttpResponseWithDetail(400, "missing_body_in_mcp_request", nil, nil, -1)
 		return types.HeaderStopAllIterationAndWatermark
