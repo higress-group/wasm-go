@@ -44,8 +44,14 @@ Runs tests only in Wasm mode with a specified wasm file path. This function allo
 
 1. **Environment Variable**: Set `WASM_FILE_PATH` environment variable
 2. **Custom Path**: Use `RunWasmTestWithPath()` or `RunTestWithPath()` functions
-3. **Auto-compilation**: The framework automatically compiles wasm binariy with a fixed filename (`wasm-unit-test.wasm`)
+3. **Auto-compilation**: The framework automatically compiles the Wasm binary with Binaryen 130 `-Oz` and a fixed filename (`wasm-unit-test.wasm`)
 4. **Debug-Friendly**: Panics are preserved in test environment for better debugging, while still recovered in production
+
+Auto-compilation requires `wasm-opt` version 130 in `PATH`. Set `WASM_OPT` to
+an explicit executable path when needed. `WASM_SKIP_OPTIMIZATION=1` is available
+for diagnostics, but optimized Wasm is the default so tests cover the release
+code shape. Set `GO_BUILD_TAGS=wasm_lite_http` when testing a plugin that uses
+the lightweight `pkg/wrapper/httpcall` package.
 
 #### Common Wasm file Path
 
@@ -66,8 +72,11 @@ my-wasm-plugin/
 **Note**: The auto-detection only searches in the current working directory. For more complex project structures, use environment variables or explicit path functions.
 
 ```bash
-# Compile wasm binary
-GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o main.wasm ./
+# Compile the default release wasm binary
+GOOS=wasip1 GOARCH=wasm go build -trimpath -buildmode=c-shared \
+  -ldflags='-s -w -buildid=' -o main.unoptimized.wasm ./
+wasm-opt main.unoptimized.wasm -Oz --enable-bulk-memory -o main.wasm
+rm -f main.unoptimized.wasm
 
 # Or specify custom path via environment variable
 export WASM_FILE_PATH="build/plugin.wasm"

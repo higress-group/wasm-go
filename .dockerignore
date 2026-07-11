@@ -1,0 +1,10 @@
+.git
+.gitignore
+.DS_Store
+.idea
+.vscode
+*.wasm
+**/*.wasm
+*.out
+coverage.*
+**/coverage.*

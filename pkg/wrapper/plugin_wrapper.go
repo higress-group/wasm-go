@@ -27,13 +27,13 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/google/uuid"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
 	"github.com/higress-group/wasm-go/pkg/iface"
+	"github.com/higress-group/wasm-go/pkg/liteuuid"
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/matcher"
 )
@@ -535,7 +535,7 @@ func NewCommonVmCtxWithOptions[PluginConfig any](pluginName string, options ...C
 	ctx := &CommonVmCtx[PluginConfig]{
 		pluginName:      pluginName,
 		hasCustomConfig: true,
-		vmID:            uuid.New().String(),
+		vmID:            liteuuid.New().String(),
 	}
 	for _, opt := range options {
 		opt.Apply(ctx)
@@ -1228,7 +1228,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpStreamDone() {
 func (ctx *CommonHttpCtx[PluginConfig]) RouteCall(method, rawURL string, headers [][2]string, body []byte, callback iface.RouteResponseCallback) error {
 	proxywasm.RemoveHttpRequestHeader("Accept-Encoding")
 	proxywasm.RemoveHttpRequestHeader("Content-Length")
-	requestID := uuid.New().String()
+	requestID := liteuuid.New().String()
 	ctx.responseCallback = func(statusCode int, responseHeaders [][2]string, responseBody []byte) {
 		callback(statusCode, responseHeaders, responseBody)
 		log.UnsafeInfof("route call end, id:%s, code:%d, headers:%#v, body:%s", requestID, statusCode, responseHeaders, strings.ReplaceAll(string(responseBody), "\n", `\n`))

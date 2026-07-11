@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !wasm_lite_http
+
 package wrapper
 
 import (
@@ -21,9 +23,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 
+	"github.com/higress-group/wasm-go/pkg/liteuuid"
 	"github.com/higress-group/wasm-go/pkg/log"
 )
 
@@ -117,7 +119,7 @@ func HttpCall(cluster Cluster, method, rawURL string, headers [][2]string, body 
 		timeout = timeoutMillisecond[0]
 	}
 	headers = append(headers, [2]string{":method", method}, [2]string{":path", path}, [2]string{":authority", authority})
-	requestID := uuid.New().String()
+	requestID := liteuuid.New().String()
 	_, err = proxywasm.DispatchHttpCall(cluster.ClusterName(), headers, body, nil, timeout, func(numHeaders, bodySize, numTrailers int) {
 		respBody, err := proxywasm.GetHttpCallResponseBody(0, bodySize)
 		if err != nil {

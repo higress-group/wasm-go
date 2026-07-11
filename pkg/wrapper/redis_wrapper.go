@@ -23,9 +23,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/tidwall/resp"
+
+	"github.com/higress-group/wasm-go/pkg/liteuuid"
 )
 
 type RedisResponseCallback func(response resp.Value)
@@ -171,7 +172,7 @@ func RedisCall(cluster Cluster, respQuery []byte, callback RedisResponseCallback
 }
 
 func redisCallInternal(cluster Cluster, respQuery []byte, callback RedisResponseCallback, readyPtr *bool, checkReadyFunc func() error) error {
-	requestID := uuid.New().String()
+	requestID := liteuuid.New().String()
 	_, err := proxywasm.DispatchRedisCall(
 		cluster.ClusterName(),
 		respQuery,

@@ -41,7 +41,7 @@ func init() {
 	os.Setenv("WASM_DISABLE_PANIC_RECOVERY", "true")
 }
 
-// compileWasm compiles the current Go project to wasm binary with a fixed test filename
+// compileWasm compiles the current Go project to an optimized wasm binary with a fixed test filename.
 func compileWasm() (string, error) {
 	// Get current working directory
 	workDir, err := os.Getwd()
@@ -52,9 +52,17 @@ func compileWasm() (string, error) {
 	// Use fixed test filename that gets overwritten each time
 	fileName := "wasm-unit-test.wasm"
 	outputPath := filepath.Join(workDir, fileName)
+	rawOutputPath := outputPath + ".unoptimized"
+	defer os.Remove(rawOutputPath)
 
-	// Execute wasm compilation command
-	cmd := exec.Command("go", "build", "-buildmode=c-shared", "-o", outputPath, "./")
+	// Compile a debug-friendly Go Wasm input first. Binaryen optimization is a separate
+	// step so tests exercise the same optimized machine code shape as release builds.
+	buildArgs := []string{"build", "-trimpath", "-buildmode=c-shared"}
+	if buildTags := os.Getenv("GO_BUILD_TAGS"); buildTags != "" {
+		buildArgs = append(buildArgs, "-tags", buildTags)
+	}
+	buildArgs = append(buildArgs, "-o", rawOutputPath, "./")
+	cmd := exec.Command("go", buildArgs...)
 
 	// Filter out existing GOOS and GOARCH to avoid conflicts
 	filteredEnv := []string{}
@@ -72,7 +80,48 @@ func compileWasm() (string, error) {
 		return "", fmt.Errorf("wasm compilation failed: %v, output: %s", err, string(output))
 	}
 
-	fmt.Printf("[WASM_COMPILE] Successfully compiled wasm binary to: %s\n", outputPath)
+	// WASM_SKIP_OPTIMIZATION is an explicit diagnostics escape hatch. Production-like
+	// tests use Binaryen -Oz by default.
+	if skip := os.Getenv("WASM_SKIP_OPTIMIZATION"); skip == "1" || strings.EqualFold(skip, "true") {
+		if err := os.Remove(outputPath); err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("failed to remove stale wasm output: %v", err)
+		}
+		if err := os.Rename(rawOutputPath, outputPath); err != nil {
+			return "", fmt.Errorf("failed to publish unoptimized wasm output: %v", err)
+		}
+		fmt.Printf("[WASM_COMPILE] Successfully compiled unoptimized wasm binary to: %s\n", outputPath)
+		return outputPath, nil
+	}
+
+	wasmOpt := os.Getenv("WASM_OPT")
+	if wasmOpt == "" {
+		wasmOpt = "wasm-opt"
+	}
+	binaryenVersion := os.Getenv("BINARYEN_VERSION")
+	if binaryenVersion == "" {
+		binaryenVersion = "130"
+	}
+
+	versionOutput, err := exec.Command(wasmOpt, "--version").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to execute %s --version: %v, output: %s", wasmOpt, err, string(versionOutput))
+	}
+	expectedVersionPrefix := fmt.Sprintf("wasm-opt version %s ", binaryenVersion)
+	if !strings.HasPrefix(strings.TrimSpace(string(versionOutput)), expectedVersionPrefix) {
+		return "", fmt.Errorf("unexpected wasm-opt version: expected prefix %q, got %q", expectedVersionPrefix, strings.TrimSpace(string(versionOutput)))
+	}
+
+	if err := os.Remove(outputPath); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("failed to remove stale wasm output: %v", err)
+	}
+	optimizeCmd := exec.Command(wasmOpt, rawOutputPath, "-Oz", "--enable-bulk-memory", "-o", outputPath)
+	optimizeCmd.Dir = workDir
+	optimizeOutput, err := optimizeCmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("wasm optimization failed: %v, output: %s", err, string(optimizeOutput))
+	}
+
+	fmt.Printf("[WASM_COMPILE] Successfully compiled Binaryen -Oz wasm binary to: %s\n", outputPath)
 	return outputPath, nil
 }
 
