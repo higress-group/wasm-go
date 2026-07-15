@@ -33,6 +33,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
+	"github.com/higress-group/wasm-go/internal/abi"
 	"github.com/higress-group/wasm-go/pkg/iface"
 	"github.com/higress-group/wasm-go/pkg/log"
 	"github.com/higress-group/wasm-go/pkg/matcher"
@@ -118,10 +119,14 @@ func RegisterTickFunc(tickPeriod int64, tickFunc func()) {
 }
 
 func SetCtx[PluginConfig any](pluginName string, options ...CtxOption[PluginConfig]) {
+	// Initialize the ABI layer based on the compilation target (TinyGo or Go native Wasm)
+	abi.Init()
 	proxywasm.SetVMContext(NewCommonVmCtx(pluginName, options...))
 }
 
 func SetCtxWithOptions[PluginConfig any](pluginName string, options ...CtxOption[PluginConfig]) {
+	// Initialize the ABI layer based on the compilation target (TinyGo or Go native Wasm)
+	abi.Init()
 	proxywasm.SetVMContext(NewCommonVmCtxWithOptions(pluginName, options...))
 }
 
@@ -496,7 +501,7 @@ func WithMaxRequestsPerIoCycle[PluginConfig any](maxRequests uint64) CtxOption[P
 func setGlobalMaxRequestsPerIoCycle(maxRequests uint64) error {
 	param := make([]byte, 8)
 	binary.LittleEndian.PutUint64(param, maxRequests)
-	_, err := proxywasm.CallForeignFunction("set_global_max_requests_per_io_cycle", param)
+	_, err := callForeignFunction("set_global_max_requests_per_io_cycle", param)
 	if err != nil {
 		return fmt.Errorf("set global max requests failed: %w", err)
 	}
