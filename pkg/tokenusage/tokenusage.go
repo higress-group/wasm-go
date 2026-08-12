@@ -89,6 +89,8 @@ const (
 
 	ctxKeyDeltaSSEMessage = "delta_sse_message"
 	ctxKeyDeltaBeginning  = "delta_beginning"
+
+	OpenAIResponseSSECacheLimit = 300 * 1024
 )
 
 type TokenUsage struct {
@@ -105,11 +107,17 @@ type TokenUsage struct {
 }
 
 func GetTokenUsage(ctx wrapper.HttpContext, body []byte) TokenUsage {
-	chunks := bytes.SplitSeq(wrapper.UnifySSEChunk(body), []byte("\n\n"))
 	u := TokenUsage{
 		InputTokenDetails:  make(map[string]int64),
 		OutputTokenDetails: make(map[string]int64),
 	}
+	// Envoy may invoke the streaming callback with an empty, non-EOS body.
+	// It is not an SSE event delimiter and must not flush a pending
+	// response.completed event assembled across callbacks.
+	if len(body) == 0 {
+		return u
+	}
+	chunks := bytes.SplitSeq(wrapper.UnifySSEChunk(body), []byte("\n\n"))
 	for chunk := range chunks {
 		// the feature strings are used to identify the usage data, like:
 		// {"model":"gpt2","usage":{"prompt_tokens":1,"completion_tokens":1}}
@@ -132,7 +140,7 @@ func GetTokenUsage(ctx wrapper.HttpContext, body []byte) TokenUsage {
 }
 
 func mergeLargeResponseAPIChunks(ctx wrapper.HttpContext, chunk []byte) []byte {
-	if bytes.Contains(chunk, []byte(`"response.completed"`)) && !bytes.Contains(chunk, []byte(`"usage"`)) {
+	if bytes.Contains(chunk, []byte(`event: response.completed`)) {
 		ctx.SetContext(ctxKeyDeltaBeginning, true)
 	}
 
@@ -145,6 +153,11 @@ func mergeLargeResponseAPIChunks(ctx wrapper.HttpContext, chunk []byte) []byte {
 		} else {
 			deltaMessage := ctx.GetByteSliceContext(ctxKeyDeltaSSEMessage, []byte{})
 			deltaMessage = append(deltaMessage, chunk...)
+			// Restrict cached SSE chunks to 300KB to bound memory usage.
+			// reference: https://developers.openai.com/api/reference/resources/responses
+			if len(deltaMessage) > OpenAIResponseSSECacheLimit {
+				deltaMessage = deltaMessage[len(deltaMessage)-OpenAIResponseSSECacheLimit:]
+			}
 			ctx.SetContext(ctxKeyDeltaSSEMessage, deltaMessage)
 		}
 	}
