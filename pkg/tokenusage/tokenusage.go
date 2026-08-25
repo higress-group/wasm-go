@@ -132,7 +132,8 @@ func GetTokenUsage(ctx wrapper.HttpContext, body []byte) TokenUsage {
 }
 
 func mergeLargeResponseAPIChunks(ctx wrapper.HttpContext, chunk []byte) []byte {
-	if bytes.Contains(chunk, []byte(`"response.completed"`)) && !bytes.Contains(chunk, []byte(`"usage"`)) {
+	if bytes.Contains(chunk, []byte("event: response.completed")) ||
+		(bytes.Contains(chunk, []byte(`"response.completed"`)) && !bytes.Contains(chunk, []byte(`"usage"`))) {
 		ctx.SetContext(ctxKeyDeltaBeginning, true)
 	}
 
