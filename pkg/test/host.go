@@ -30,6 +30,8 @@ func WithEndOfStream(endOfStream bool) HeaderOptionFunc {
 // unit test can call onHttpRequestHeaders etc. to mock the host calls.
 // TestHost mock the behavior of the envoy host proxy with the wasm plugin.
 type TestHost interface {
+	CallOnHttpRequestTrailers(trailers [][2]string) types.Action
+	CallOnHttpResponseTrailers(trailers [][2]string) types.Action
 	// HostEmulator is the interface for the host emulator.
 	proxytest.HostEmulator
 	// CallOnHttpRequestHeaders call the onHttpRequestHeaders method in the wasm plugin.
@@ -359,4 +361,13 @@ func (h *testHost) GetResponseHeaders() [][2]string {
 // GetLocalResponse get the local response.
 func (h *testHost) GetLocalResponse() *proxytest.LocalHttpResponse {
 	return h.HostEmulator.GetSentLocalResponse(h.currentContextID)
+}
+
+func (h *testHost) CallOnHttpRequestTrailers(trailers [][2]string) types.Action {
+	h.ensureContextInitialized()
+	return h.HostEmulator.CallOnRequestTrailers(h.currentContextID, trailers)
+}
+func (h *testHost) CallOnHttpResponseTrailers(trailers [][2]string) types.Action {
+	h.ensureContextInitialized()
+	return h.HostEmulator.CallOnResponseTrailers(h.currentContextID, trailers)
 }

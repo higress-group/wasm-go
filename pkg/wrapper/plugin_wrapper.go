@@ -85,6 +85,7 @@ type CommonVmCtx[PluginConfig any] struct {
 	onHttpRequestBody           onHttpBodyFunc[PluginConfig]
 	onHttpStreamingRequestBody  onHttpStreamingBodyFunc[PluginConfig]
 	onHttpResponseHeaders       onHttpHeadersFunc[PluginConfig]
+	onHttpResponseTrailers      onHttpHeadersFunc[PluginConfig]
 	onHttpResponseBody          onHttpBodyFunc[PluginConfig]
 	onHttpStreamingResponseBody onHttpStreamingBodyFunc[PluginConfig]
 	onHttpStreamDone            onHttpStreamDoneFunc[PluginConfig]
@@ -323,6 +324,20 @@ func ProcessResponseHeadersBy[PluginConfig any](f oldOnHttpHeadersFunc[PluginCon
 
 func ProcessResponseHeaders[PluginConfig any](f onHttpHeadersFunc[PluginConfig]) CtxOption[PluginConfig] {
 	return &onProcessResponseHeadersOption[PluginConfig]{f: f}
+}
+
+// ProcessResponseTrailers handles trailing headers. Streaming handlers may pause
+// trailers while an asynchronous operation is holding preceding body data.
+func ProcessResponseTrailers[PluginConfig any](f onHttpHeadersFunc[PluginConfig]) CtxOption[PluginConfig] {
+	return &onProcessResponseTrailersOption[PluginConfig]{f: f}
+}
+
+type onProcessResponseTrailersOption[PluginConfig any] struct {
+	f onHttpHeadersFunc[PluginConfig]
+}
+
+func (o *onProcessResponseTrailersOption[PluginConfig]) Apply(ctx *CommonVmCtx[PluginConfig]) {
+	ctx.onHttpResponseTrailers = o.f
 }
 
 type onProcessResponseBodyOption[PluginConfig any] struct {
@@ -769,6 +784,8 @@ type CommonHttpCtx[PluginConfig any] struct {
 	pauseStreamingResponse    bool
 	requestBodySize           int
 	responseBodySize          int
+	requestBodyFinalized      bool
+	responseBodyFinalized     bool
 	contextID                 uint32
 	userContext               map[string]interface{}
 	userAttribute             map[string]interface{}
@@ -1110,12 +1127,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 		if !endOfStream {
 			return types.ActionPause
 		}
-		body, err := proxywasm.GetHttpRequestBody(0, ctx.requestBodySize)
-		if err != nil {
-			ctx.plugin.vm.log.Warnf("get request body failed: %v", err)
-			return types.ActionContinue
-		}
-		return ctx.plugin.vm.onHttpRequestBody(ctx, *ctx.config, body)
+		return ctx.finalizeRequestBody()
 	}
 	return types.ActionContinue
 }
@@ -1199,17 +1211,68 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseBody(bodySize int, endOfSt
 		return types.ActionContinue
 	}
 	if ctx.plugin.vm.onHttpResponseBody != nil {
+		ctx.responseBodySize = bodySize
 		if !endOfStream {
 			return types.ActionPause
 		}
-		body, err := proxywasm.GetHttpResponseBody(0, bodySize)
+		return ctx.finalizeResponseBody()
+	}
+	return types.ActionContinue
+}
+
+// Trailers terminate buffered messages just like DATA end-of-stream. Keep the
+// same finalizer so validation and header metadata run exactly once.
+func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestTrailers(int) types.Action {
+	defer recoverFunc()
+	ctx.executionPhase = iface.DecodeData
+	return ctx.finalizeRequestBody()
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseTrailers(int) types.Action {
+	defer recoverFunc()
+	ctx.executionPhase = iface.EncodeData
+	if ctx.config != nil && ctx.plugin.vm.onHttpResponseTrailers != nil {
+		if action := ctx.plugin.vm.onHttpResponseTrailers(ctx, *ctx.config); action != types.ActionContinue {
+			return action
+		}
+	}
+	return ctx.finalizeResponseBody()
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) finalizeRequestBody() types.Action {
+	if ctx.config == nil || !ctx.needRequestBody || ctx.requestBodyFinalized ||
+		(ctx.streamingRequestBody && ctx.plugin.vm.onHttpStreamingRequestBody != nil) || ctx.plugin.vm.onHttpRequestBody == nil {
+		return types.ActionContinue
+	}
+	ctx.requestBodyFinalized = true
+	var body []byte
+	if ctx.requestBodySize > 0 {
+		var err error
+		body, err = proxywasm.GetHttpRequestBody(0, ctx.requestBodySize)
+		if err != nil {
+			ctx.plugin.vm.log.Warnf("get request body failed: %v", err)
+			return types.ActionContinue
+		}
+	}
+	return ctx.plugin.vm.onHttpRequestBody(ctx, *ctx.config, body)
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) finalizeResponseBody() types.Action {
+	if ctx.config == nil || !ctx.needResponseBody || ctx.responseBodyFinalized ||
+		(ctx.streamingResponseBody && ctx.plugin.vm.onHttpStreamingResponseBody != nil) || ctx.plugin.vm.onHttpResponseBody == nil {
+		return types.ActionContinue
+	}
+	ctx.responseBodyFinalized = true
+	var body []byte
+	if ctx.responseBodySize > 0 {
+		var err error
+		body, err = proxywasm.GetHttpResponseBody(0, ctx.responseBodySize)
 		if err != nil {
 			ctx.plugin.vm.log.Warnf("get response body failed: %v", err)
 			return types.ActionContinue
 		}
-		return ctx.plugin.vm.onHttpResponseBody(ctx, *ctx.config, body)
 	}
-	return types.ActionContinue
+	return ctx.plugin.vm.onHttpResponseBody(ctx, *ctx.config, body)
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpStreamDone() {
