@@ -30,7 +30,7 @@ type bodyDeliveryHarness struct {
 	responseBodyCallCount int
 }
 
-func newBodyDeliveryHarness(t *testing.T, requireBody bool) *bodyDeliveryHarness {
+func newBodyDeliveryHarness(t *testing.T, requireBody bool, headerOptions ...func(HttpContext)) *bodyDeliveryHarness {
 	t.Helper()
 	h := &bodyDeliveryHarness{}
 	vm := NewCommonVmCtx[struct{}](
@@ -38,6 +38,9 @@ func newBodyDeliveryHarness(t *testing.T, requireBody bool) *bodyDeliveryHarness
 		ProcessRequestHeaders(func(ctx HttpContext, _ struct{}) types.Action {
 			if requireBody {
 				ctx.RequireRequestBody()
+			}
+			for _, option := range headerOptions {
+				option(ctx)
 			}
 			return types.ActionContinue
 		}),
@@ -60,9 +63,9 @@ func newBodyDeliveryHarness(t *testing.T, requireBody bool) *bodyDeliveryHarness
 	return h
 }
 
-func (h *bodyDeliveryHarness) callRequestHeaders(headers [][2]string) types.Action {
+func (h *bodyDeliveryHarness) callRequestHeaders(headers [][2]string, endOfStream bool) types.Action {
 	headers = append(headers, [2]string{":authority", "default.test.com"})
-	return h.host.CallOnRequestHeaders(h.contextID, headers, false)
+	return h.host.CallOnRequestHeaders(h.contextID, headers, endOfStream)
 }
 
 func TestRequireRequestBodyRawDelivery(t *testing.T) {
@@ -78,7 +81,7 @@ func TestRequireRequestBodyRawDelivery(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newBodyDeliveryHarness(t, true)
-			require.Equal(t, types.ActionContinue, h.callRequestHeaders(tt.headers))
+			require.Equal(t, types.ActionContinue, h.callRequestHeaders(tt.headers, false))
 			require.Equal(t, types.ActionPause, h.host.CallOnRequestBody(h.contextID, payload[:3], false))
 			require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, payload[3:], true))
 			require.Equal(t, 1, h.requestBodyCalls)
@@ -91,7 +94,7 @@ func TestRequireRequestBodyRawDelivery(t *testing.T) {
 func TestRequireRequestBodyWebSocketRequestOnly(t *testing.T) {
 	h := newBodyDeliveryHarness(t, true)
 	headers := [][2]string{{"connection", "upgrade"}, {"upgrade", "websocket"}}
-	require.Equal(t, types.ActionContinue, h.callRequestHeaders(headers))
+	require.Equal(t, types.ActionContinue, h.callRequestHeaders(headers, false))
 	payload := []byte{0x81, 0x02, 'h', 'i'}
 	require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, payload, true))
 	require.Equal(t, payload, h.requestBody)
@@ -102,10 +105,39 @@ func TestRequireRequestBodyWebSocketRequestOnly(t *testing.T) {
 	require.Zero(t, h.responseBodyCallCount)
 }
 
-func TestRequireRequestBodyBufferFailure(t *testing.T) {
+func TestRequireRequestBodyHeaderEndOfStream(t *testing.T) {
 	h := newBodyDeliveryHarness(t, true)
-	require.Equal(t, types.ActionContinue, h.callRequestHeaders(nil))
-	require.Equal(t, types.ActionPause, h.host.CallOnRequestBody(h.contextID, nil, true))
+	require.Equal(t, types.ActionContinue, h.callRequestHeaders(nil, true))
+	require.Equal(t, 1, h.requestBodyCalls)
+	require.Empty(t, h.requestBody)
+	require.Nil(t, h.host.GetSentLocalResponse(h.contextID))
+
+	require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, []byte("unexpected"), true))
+	require.Equal(t, 1, h.requestBodyCalls)
+	require.Empty(t, h.requestBody)
+}
+
+func TestRequireRequestBodyOverridesDontReadRequestBody(t *testing.T) {
+	h := newBodyDeliveryHarness(t, true, func(ctx HttpContext) {
+		ctx.DontReadRequestBody()
+	})
+	require.Equal(t, types.ActionContinue, h.callRequestHeaders(nil, false))
+	payload := []byte("required")
+	require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, payload, true))
+	require.Equal(t, 1, h.requestBodyCalls)
+	require.Equal(t, payload, h.requestBody)
+	require.Nil(t, h.host.GetSentLocalResponse(h.contextID))
+}
+
+func TestRequireRequestBodyBufferLimitExceeded(t *testing.T) {
+	const bufferLimit = 4
+	payload := []byte("larger than the buffer limit")
+	h := newBodyDeliveryHarness(t, true, func(ctx HttpContext) {
+		ctx.SetRequestBodyBufferLimit(bufferLimit)
+	})
+	require.Equal(t, types.ActionContinue, h.callRequestHeaders(nil, false))
+	require.Equal(t, types.ActionPause, h.host.CallOnRequestBody(h.contextID, payload[:2], false))
+	require.Equal(t, types.ActionPause, h.host.CallOnRequestBody(h.contextID, payload[2:], true))
 	require.Zero(t, h.requestBodyCalls)
 	response := h.host.GetSentLocalResponse(h.contextID)
 	require.NotNil(t, response)
@@ -124,7 +156,7 @@ func TestRequestBodyLegacySkips(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newBodyDeliveryHarness(t, false)
-			require.Equal(t, types.ActionContinue, h.callRequestHeaders(tt.headers))
+			require.Equal(t, types.ActionContinue, h.callRequestHeaders(tt.headers, false))
 			require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, []byte("skipped"), true))
 			require.Zero(t, h.requestBodyCalls)
 			require.Nil(t, h.host.GetSentLocalResponse(h.contextID))
@@ -133,7 +165,7 @@ func TestRequestBodyLegacySkips(t *testing.T) {
 
 	t.Run("plain body remains delivered", func(t *testing.T) {
 		h := newBodyDeliveryHarness(t, false)
-		require.Equal(t, types.ActionContinue, h.callRequestHeaders(nil))
+		require.Equal(t, types.ActionContinue, h.callRequestHeaders(nil, false))
 		require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, []byte("plain"), true))
 		require.Equal(t, []byte("plain"), h.requestBody)
 		require.Equal(t, 1, h.requestBodyCalls)
