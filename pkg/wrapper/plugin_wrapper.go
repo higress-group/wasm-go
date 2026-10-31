@@ -49,6 +49,8 @@ const (
 	PluginIDKey          = "_plugin_id_"
 	VMLeaseKeyPrefix     = "higress_wasm_vm_lease"
 	ConfigStoreLeaderKey = "config_store"
+
+	RequiredRequestBodyFailureStatusCode = 503
 )
 
 type oldParseConfigFunc[PluginConfig any] func(json gjson.Result, config *PluginConfig, log log.Log) error
@@ -764,6 +766,7 @@ type CommonHttpCtx[PluginConfig any] struct {
 	config                    *PluginConfig
 	needRequestBody           bool
 	needResponseBody          bool
+	requireRequestBody        bool
 	streamingRequestBody      bool
 	streamingResponseBody     bool
 	pauseStreamingResponse    bool
@@ -919,6 +922,11 @@ func (ctx *CommonHttpCtx[PluginConfig]) Path() string {
 
 func (ctx *CommonHttpCtx[PluginConfig]) Method() string {
 	return ctx.method
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) RequireRequestBody() {
+	ctx.requireRequestBody = true
+	ctx.needRequestBody = true
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) DontReadRequestBody() {
@@ -1094,6 +1102,20 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 	}
 	if !ctx.needRequestBody {
 		return types.ActionContinue
+	}
+	if ctx.requireRequestBody && ctx.plugin.vm.onHttpRequestBody != nil {
+		if !endOfStream {
+			return types.ActionPause
+		}
+		body, err := proxywasm.GetHttpRequestBody(0, bodySize)
+		if err != nil || len(body) != bodySize {
+			ctx.plugin.vm.log.Warnf("get required request body failed: %v, expected %d bytes, got %d", err, bodySize, len(body))
+			if sendErr := proxywasm.SendHttpResponse(RequiredRequestBodyFailureStatusCode, nil, nil, -1); sendErr != nil {
+				ctx.plugin.vm.log.Errorf("send request body failure response failed: %v", sendErr)
+			}
+			return types.ActionPause
+		}
+		return ctx.plugin.vm.onHttpRequestBody(ctx, *ctx.config, body)
 	}
 	if ctx.plugin.vm.onHttpStreamingRequestBody != nil && ctx.streamingRequestBody {
 		chunk, _ := proxywasm.GetHttpRequestBody(0, bodySize)

@@ -58,6 +58,10 @@ type HttpContext interface {
 	WriteUserAttributeToLogWithKey(key string) error
 	// You can call this function to set custom trace span attribute
 	WriteUserAttributeToTrace() error
+	// RequireRequestBody requests buffered delivery to ProcessRequestBody for the current request,
+	// including binary, encoded, and WebSocket upgrade requests. If the complete body is unavailable,
+	// the wrapper sends a 503 response and pauses the request. The response body path is unchanged.
+	RequireRequestBody()
 	// If the onHttpRequestBody handle is not set, the request body will not be read by default
 	DontReadRequestBody()
 	// If the onHttpResponseBody handle is not set, the request body will not be read by default
