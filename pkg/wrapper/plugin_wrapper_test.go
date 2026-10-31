@@ -17,6 +17,7 @@ package wrapper
 import (
 	"testing"
 
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/stretchr/testify/require"
@@ -27,12 +28,17 @@ type bodyDeliveryHarness struct {
 	contextID             uint32
 	requestBody           []byte
 	requestBodyCalls      int
+	requestHeaderAction   types.Action
+	requestBodyAction     types.Action
 	responseBodyCallCount int
 }
 
 func newBodyDeliveryHarness(t *testing.T, requireBody bool, headerOptions ...func(HttpContext)) *bodyDeliveryHarness {
 	t.Helper()
-	h := &bodyDeliveryHarness{}
+	h := &bodyDeliveryHarness{
+		requestHeaderAction: types.ActionContinue,
+		requestBodyAction:   types.ActionContinue,
+	}
 	vm := NewCommonVmCtx[struct{}](
 		"body-delivery-test",
 		ProcessRequestHeaders(func(ctx HttpContext, _ struct{}) types.Action {
@@ -42,12 +48,12 @@ func newBodyDeliveryHarness(t *testing.T, requireBody bool, headerOptions ...fun
 			for _, option := range headerOptions {
 				option(ctx)
 			}
-			return types.ActionContinue
+			return h.requestHeaderAction
 		}),
 		ProcessRequestBody(func(_ HttpContext, _ struct{}, body []byte) types.Action {
 			h.requestBodyCalls++
 			h.requestBody = append([]byte(nil), body...)
-			return types.ActionContinue
+			return h.requestBodyAction
 		}),
 		ProcessResponseBody(func(_ HttpContext, _ struct{}, _ []byte) types.Action {
 			h.responseBodyCallCount++
@@ -115,6 +121,43 @@ func TestRequireRequestBodyHeaderEndOfStream(t *testing.T) {
 	require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, []byte("unexpected"), true))
 	require.Equal(t, 1, h.requestBodyCalls)
 	require.Empty(t, h.requestBody)
+}
+
+func TestRequireRequestBodyHeaderPauseSkipsBodyDelivery(t *testing.T) {
+	h := newBodyDeliveryHarness(t, true, func(ctx HttpContext) {
+		require.NoError(t, proxywasm.SendHttpResponse(403, nil, nil, -1))
+	})
+	h.requestHeaderAction = types.ActionPause
+	require.Equal(t, types.ActionPause, h.callRequestHeaders(nil, true))
+	require.Zero(t, h.requestBodyCalls)
+	response := h.host.GetSentLocalResponse(h.contextID)
+	require.NotNil(t, response)
+	require.Equal(t, uint32(403), response.StatusCode)
+}
+
+func TestRequireRequestBodyEmptyTerminalBody(t *testing.T) {
+	h := newBodyDeliveryHarness(t, true)
+	require.Equal(t, types.ActionContinue, h.callRequestHeaders(nil, false))
+	require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, nil, true))
+	require.Equal(t, 1, h.requestBodyCalls)
+	require.Empty(t, h.requestBody)
+	require.Nil(t, h.host.GetSentLocalResponse(h.contextID))
+}
+
+func TestRequireRequestBodyTrailersDeliverBufferedBody(t *testing.T) {
+	h := newBodyDeliveryHarness(t, true)
+	payload := []byte{0, 0, 0, 0, 1, 'x'}
+	headers := [][2]string{{"content-type", "application/grpc"}}
+	require.Equal(t, types.ActionContinue, h.callRequestHeaders(headers, false))
+	require.Equal(t, types.ActionPause, h.host.CallOnRequestBody(h.contextID, payload, false))
+	require.Zero(t, h.requestBodyCalls)
+	require.Equal(t, types.ActionContinue, h.host.CallOnRequestTrailers(h.contextID, [][2]string{{"x-checksum", "abc"}}))
+	require.Equal(t, 1, h.requestBodyCalls)
+	require.Equal(t, payload, h.requestBody)
+	require.Nil(t, h.host.GetSentLocalResponse(h.contextID))
+
+	require.Equal(t, types.ActionContinue, h.host.CallOnRequestTrailers(h.contextID, nil))
+	require.Equal(t, 1, h.requestBodyCalls)
 }
 
 func TestRequireRequestBodyOverridesDontReadRequestBody(t *testing.T) {

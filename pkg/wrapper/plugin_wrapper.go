@@ -1103,12 +1103,31 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 		return types.ActionContinue
 	}
 	action := ctx.plugin.vm.onHttpRequestHeaders(ctx, *config)
+	if action == types.ActionPause {
+		return action
+	}
 	if ctx.requireRequestBody && ctx.requestHeaderEndOfStream &&
 		!ctx.requestBodyCallbackInvoked && ctx.plugin.vm.onHttpRequestBody != nil {
-		ctx.requestBodyCallbackInvoked = true
-		return ctx.plugin.vm.onHttpRequestBody(ctx, *config, nil)
+		return ctx.deliverRequiredRequestBody(0)
 	}
 	return action
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) deliverRequiredRequestBody(bodySize int) types.Action {
+	var body []byte
+	var err error
+	if bodySize > 0 {
+		body, err = proxywasm.GetHttpRequestBody(0, bodySize)
+	}
+	if err != nil || len(body) != bodySize {
+		ctx.plugin.vm.log.Warnf("get required request body failed: %v, expected %d bytes, got %d", err, bodySize, len(body))
+		if sendErr := proxywasm.SendHttpResponse(RequiredRequestBodyFailureStatusCode, nil, nil, -1); sendErr != nil {
+			ctx.plugin.vm.log.Errorf("send request body failure response failed: %v", sendErr)
+		}
+		return types.ActionPause
+	}
+	ctx.requestBodyCallbackInvoked = true
+	return ctx.plugin.vm.onHttpRequestBody(ctx, *ctx.config, body)
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStream bool) types.Action {
@@ -1128,19 +1147,11 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 			}
 			return types.ActionPause
 		}
+		ctx.requestBodySize = bodySize
 		if !endOfStream {
 			return types.ActionPause
 		}
-		body, err := proxywasm.GetHttpRequestBody(0, bodySize)
-		if err != nil || len(body) != bodySize {
-			ctx.plugin.vm.log.Warnf("get required request body failed: %v, expected %d bytes, got %d", err, bodySize, len(body))
-			if sendErr := proxywasm.SendHttpResponse(RequiredRequestBodyFailureStatusCode, nil, nil, -1); sendErr != nil {
-				ctx.plugin.vm.log.Errorf("send request body failure response failed: %v", sendErr)
-			}
-			return types.ActionPause
-		}
-		ctx.requestBodyCallbackInvoked = true
-		return ctx.plugin.vm.onHttpRequestBody(ctx, *ctx.config, body)
+		return ctx.deliverRequiredRequestBody(bodySize)
 	}
 	if !ctx.needRequestBody {
 		return types.ActionContinue
@@ -1168,6 +1179,15 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 		return ctx.plugin.vm.onHttpRequestBody(ctx, *ctx.config, body)
 	}
 	return types.ActionContinue
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestTrailers(numTrailers int) types.Action {
+	defer recoverFunc()
+	if ctx.config == nil || !ctx.requireRequestBody || ctx.requestBodyCallbackInvoked ||
+		ctx.plugin.vm.onHttpRequestBody == nil {
+		return types.ActionContinue
+	}
+	return ctx.deliverRequiredRequestBody(ctx.requestBodySize)
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseHeaders(numHeaders int, endOfStream bool) types.Action {
