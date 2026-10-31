@@ -17,7 +17,6 @@ package wrapper
 import (
 	"testing"
 
-	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/stretchr/testify/require"
@@ -123,16 +122,65 @@ func TestRequireRequestBodyHeaderEndOfStream(t *testing.T) {
 	require.Empty(t, h.requestBody)
 }
 
-func TestRequireRequestBodyHeaderPauseSkipsBodyDelivery(t *testing.T) {
-	h := newBodyDeliveryHarness(t, true, func(ctx HttpContext) {
-		require.NoError(t, proxywasm.SendHttpResponse(403, nil, nil, -1))
-	})
+func TestRequireRequestBodyHeaderPauseDeliversBody(t *testing.T) {
+	h := newBodyDeliveryHarness(t, true)
 	h.requestHeaderAction = types.ActionPause
 	require.Equal(t, types.ActionPause, h.callRequestHeaders(nil, true))
-	require.Zero(t, h.requestBodyCalls)
-	response := h.host.GetSentLocalResponse(h.contextID)
+	require.Equal(t, 1, h.requestBodyCalls)
+	require.Empty(t, h.requestBody)
+	require.Nil(t, h.host.GetSentLocalResponse(h.contextID))
+
+	require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, []byte("unexpected"), true))
+	require.Equal(t, 1, h.requestBodyCalls)
+	require.Empty(t, h.requestBody)
+}
+
+func TestRequireRequestBodyWithoutBufferedHandlerHeaderCallback(t *testing.T) {
+	vm := NewCommonVmCtx[struct{}](
+		"required-body-without-buffered-handler",
+		ProcessRequestHeaders(func(ctx HttpContext, _ struct{}) types.Action {
+			ctx.RequireRequestBody()
+			return types.ActionContinue
+		}),
+	)
+	host, reset := proxytest.NewHostEmulator(proxytest.NewEmulatorOption().WithVMContext(vm))
+	t.Cleanup(reset)
+	host.RegisterForeignFunction("get_log_level", func([]byte) []byte { return make([]byte, 4) })
+	require.Equal(t, types.OnPluginStartStatusOK, host.StartPlugin())
+	contextID := host.InitializeHttpContext()
+
+	headers := [][2]string{{":authority", "default.test.com"}}
+	require.Equal(t, types.ActionPause, host.CallOnRequestHeaders(contextID, headers, false))
+	response := host.GetSentLocalResponse(contextID)
 	require.NotNil(t, response)
-	require.Equal(t, uint32(403), response.StatusCode)
+	require.Equal(t, uint32(RequiredRequestBodyFailureStatusCode), response.StatusCode)
+	require.Equal(t, types.ActionPause, host.CallOnRequestBody(contextID, []byte("body"), true))
+	require.Equal(t, types.ActionPause, host.CallOnRequestTrailers(contextID, nil))
+}
+
+func TestRequireRequestBodyWithoutBufferedHandlerStreamingCallback(t *testing.T) {
+	streamingCalls := 0
+	vm := NewCommonVmCtx[struct{}](
+		"required-body-with-streaming-handler",
+		ProcessStreamingRequestBody(func(ctx HttpContext, _ struct{}, chunk []byte, _ bool) []byte {
+			streamingCalls++
+			ctx.RequireRequestBody()
+			return chunk
+		}),
+	)
+	host, reset := proxytest.NewHostEmulator(proxytest.NewEmulatorOption().WithVMContext(vm))
+	t.Cleanup(reset)
+	host.RegisterForeignFunction("get_log_level", func([]byte) []byte { return make([]byte, 4) })
+	require.Equal(t, types.OnPluginStartStatusOK, host.StartPlugin())
+	contextID := host.InitializeHttpContext()
+
+	headers := [][2]string{{":authority", "default.test.com"}}
+	require.Equal(t, types.ActionContinue, host.CallOnRequestHeaders(contextID, headers, false))
+	require.Equal(t, types.ActionPause, host.CallOnRequestBody(contextID, []byte("body"), true))
+	require.Equal(t, 1, streamingCalls)
+	response := host.GetSentLocalResponse(contextID)
+	require.NotNil(t, response)
+	require.Equal(t, uint32(RequiredRequestBodyFailureStatusCode), response.StatusCode)
 }
 
 func TestRequireRequestBodyEmptyTerminalBody(t *testing.T) {
