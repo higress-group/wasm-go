@@ -40,7 +40,17 @@ import (
 
 type Log log.Log
 type PluginContext iface.PluginContext
-type HttpContext iface.HttpContext
+type HttpContext interface {
+	iface.HttpContext
+	// RequireRequestBody requests exactly one buffered ProcessRequestBody call per request,
+	// including binary, encoded, WebSocket upgrade, and header-only requests. Header-only requests
+	// receive an empty body immediately after ProcessRequestHeaders, even when that callback pauses;
+	// the header pause action is preserved. The plugin must register ProcessRequestBody.
+	// DontReadRequestBody does not cancel required delivery. If the complete body is unavailable or
+	// exceeds the configured buffer limit, the wrapper sends a 503 response and pauses the request
+	// without calling ProcessRequestBody.
+	RequireRequestBody()
+}
 
 const (
 	CustomLogKey         = "custom_log"
@@ -49,6 +59,8 @@ const (
 	PluginIDKey          = "_plugin_id_"
 	VMLeaseKeyPrefix     = "higress_wasm_vm_lease"
 	ConfigStoreLeaderKey = "config_store"
+
+	RequiredRequestBodyFailureStatusCode = 503
 )
 
 type oldParseConfigFunc[PluginConfig any] func(json gjson.Result, config *PluginConfig, log log.Log) error
@@ -760,23 +772,26 @@ func (ctx *CommonPluginCtx[PluginConfig]) NewHttpContext(contextID uint32) types
 
 type CommonHttpCtx[PluginConfig any] struct {
 	types.DefaultHttpContext
-	plugin                    *CommonPluginCtx[PluginConfig]
-	config                    *PluginConfig
-	needRequestBody           bool
-	needResponseBody          bool
-	streamingRequestBody      bool
-	streamingResponseBody     bool
-	pauseStreamingResponse    bool
-	requestBodySize           int
-	responseBodySize          int
-	contextID                 uint32
-	userContext               map[string]interface{}
-	userAttribute             map[string]interface{}
-	bufferQueue               [][]byte
-	responseCallback          iface.RouteResponseCallback
-	executionPhase            iface.HTTPExecutionPhase
-	requestHeaderEndOfStream  bool
-	responseHeaderEndOfStream bool
+	plugin                     *CommonPluginCtx[PluginConfig]
+	config                     *PluginConfig
+	needRequestBody            bool
+	needResponseBody           bool
+	requireRequestBody         bool
+	requestBodyCallbackInvoked bool
+	streamingRequestBody       bool
+	streamingResponseBody      bool
+	pauseStreamingResponse     bool
+	requestBodySize            int
+	requestBodyBufferLimit     uint32
+	responseBodySize           int
+	contextID                  uint32
+	userContext                map[string]interface{}
+	userAttribute              map[string]interface{}
+	bufferQueue                [][]byte
+	responseCallback           iface.RouteResponseCallback
+	executionPhase             iface.HTTPExecutionPhase
+	requestHeaderEndOfStream   bool
+	responseHeaderEndOfStream  bool
 	// Cached request pseudo-headers from the header phase
 	scheme string
 	host   string
@@ -921,6 +936,17 @@ func (ctx *CommonHttpCtx[PluginConfig]) Method() string {
 	return ctx.method
 }
 
+func (ctx *CommonHttpCtx[PluginConfig]) RequireRequestBody() {
+	ctx.requireRequestBody = true
+	ctx.needRequestBody = true
+	if ctx.plugin.vm.onHttpRequestBody == nil {
+		ctx.plugin.vm.log.Errorf("RequireRequestBody requires ProcessRequestBody to be registered")
+		if err := proxywasm.SendHttpResponse(RequiredRequestBodyFailureStatusCode, nil, nil, -1); err != nil {
+			ctx.plugin.vm.log.Errorf("send request body failure response failed: %v", err)
+		}
+	}
+}
+
 func (ctx *CommonHttpCtx[PluginConfig]) DontReadRequestBody() {
 	ctx.needRequestBody = false
 }
@@ -964,6 +990,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) DisableReroute() {
 
 func (ctx *CommonHttpCtx[PluginConfig]) SetRequestBodyBufferLimit(size uint32) {
 	ctx.plugin.vm.log.Debugf("SetRequestBodyBufferLimit: %d", size)
+	ctx.requestBodyBufferLimit = size
 	_ = proxywasm.SetProperty([]string{"set_decoder_buffer_limit"}, []byte(strconv.Itoa(int(size))))
 }
 
@@ -1083,7 +1110,35 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 	if ctx.plugin.vm.onHttpRequestHeaders == nil {
 		return types.ActionContinue
 	}
-	return ctx.plugin.vm.onHttpRequestHeaders(ctx, *config)
+	action := ctx.plugin.vm.onHttpRequestHeaders(ctx, *config)
+	if ctx.requireRequestBody && ctx.plugin.vm.onHttpRequestBody == nil {
+		return types.ActionPause
+	}
+	if ctx.requireRequestBody && ctx.requestHeaderEndOfStream && !ctx.requestBodyCallbackInvoked {
+		bodyAction := ctx.deliverRequiredRequestBody(0)
+		if action == types.ActionPause {
+			return action
+		}
+		return bodyAction
+	}
+	return action
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) deliverRequiredRequestBody(bodySize int) types.Action {
+	var body []byte
+	var err error
+	if bodySize > 0 {
+		body, err = proxywasm.GetHttpRequestBody(0, bodySize)
+	}
+	if err != nil || len(body) != bodySize {
+		ctx.plugin.vm.log.Warnf("get required request body failed: %v, expected %d bytes, got %d", err, bodySize, len(body))
+		if sendErr := proxywasm.SendHttpResponse(RequiredRequestBodyFailureStatusCode, nil, nil, -1); sendErr != nil {
+			ctx.plugin.vm.log.Errorf("send request body failure response failed: %v", sendErr)
+		}
+		return types.ActionPause
+	}
+	ctx.requestBodyCallbackInvoked = true
+	return ctx.plugin.vm.onHttpRequestBody(ctx, *ctx.config, body)
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStream bool) types.Action {
@@ -1092,12 +1147,35 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 	if ctx.config == nil {
 		return types.ActionContinue
 	}
+	if ctx.requireRequestBody {
+		if ctx.plugin.vm.onHttpRequestBody == nil {
+			return types.ActionPause
+		}
+		if ctx.requestBodyCallbackInvoked {
+			return types.ActionContinue
+		}
+		if ctx.requestBodyBufferLimit > 0 && uint32(bodySize) > ctx.requestBodyBufferLimit {
+			ctx.plugin.vm.log.Warnf("required request body exceeds buffer limit: %d bytes, limit %d", bodySize, ctx.requestBodyBufferLimit)
+			if sendErr := proxywasm.SendHttpResponse(RequiredRequestBodyFailureStatusCode, nil, nil, -1); sendErr != nil {
+				ctx.plugin.vm.log.Errorf("send request body failure response failed: %v", sendErr)
+			}
+			return types.ActionPause
+		}
+		ctx.requestBodySize = bodySize
+		if !endOfStream {
+			return types.ActionPause
+		}
+		return ctx.deliverRequiredRequestBody(bodySize)
+	}
 	if !ctx.needRequestBody {
 		return types.ActionContinue
 	}
 	if ctx.plugin.vm.onHttpStreamingRequestBody != nil && ctx.streamingRequestBody {
 		chunk, _ := proxywasm.GetHttpRequestBody(0, bodySize)
 		modifiedChunk := ctx.plugin.vm.onHttpStreamingRequestBody(ctx, *ctx.config, chunk, endOfStream)
+		if ctx.requireRequestBody && ctx.plugin.vm.onHttpRequestBody == nil {
+			return types.ActionPause
+		}
 		err := proxywasm.ReplaceHttpRequestBody(modifiedChunk)
 		if err != nil {
 			ctx.plugin.vm.log.Warnf("replace request body chunk failed: %v", err)
@@ -1118,6 +1196,17 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 		return ctx.plugin.vm.onHttpRequestBody(ctx, *ctx.config, body)
 	}
 	return types.ActionContinue
+}
+
+func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestTrailers(numTrailers int) types.Action {
+	defer recoverFunc()
+	if ctx.config == nil || !ctx.requireRequestBody || ctx.requestBodyCallbackInvoked {
+		return types.ActionContinue
+	}
+	if ctx.plugin.vm.onHttpRequestBody == nil {
+		return types.ActionPause
+	}
+	return ctx.deliverRequiredRequestBody(ctx.requestBodySize)
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseHeaders(numHeaders int, endOfStream bool) types.Action {
