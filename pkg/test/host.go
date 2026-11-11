@@ -198,7 +198,8 @@ func (h *testHost) ensureContextInitialized() {
 	if !h.currentContextValid {
 		h.InitHttp()
 		action := h.HostEmulator.CallOnRequestHeaders(h.currentContextID, [][2]string{{":authority", defaultTestDomain}}, false)
-		if action != types.ActionContinue {
+		// Buffered body handlers hold headers until the body callback completes.
+		if action != types.ActionContinue && action != types.HeaderStopIteration {
 			panic("wasm plugin unit test should CallOnHttpRequestHeaders first")
 		}
 	}
