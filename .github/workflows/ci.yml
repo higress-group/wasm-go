@@ -40,6 +40,18 @@ jobs:
           go mod download
           go mod verify
 
+      - name: Install Binaryen 130
+        env:
+          BINARYEN_VERSION: "130"
+          BINARYEN_SHA256: "0a18362361ad05465118cd8eeb72edaeec89de6894bc283576ef4e07aa3babcc"
+        run: |
+          archive="binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/${archive}" -o "${RUNNER_TEMP}/${archive}"
+          echo "${BINARYEN_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${archive}" -C "${RUNNER_TEMP}"
+          echo "${RUNNER_TEMP}/binaryen-version_${BINARYEN_VERSION}/bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/binaryen-version_${BINARYEN_VERSION}/bin/wasm-opt" --version
+
       - name: Run tests in pkg directory
         run: |
           echo "Running tests in pkg directory..."
@@ -60,6 +72,15 @@ jobs:
               cd ..
             fi
           done
+
+      - name: Build lightweight wrapper profile
+        run: |
+          cd examples/request-block
+          if GOOS=wasip1 GOARCH=wasm go list -tags=wasm_lite_http -deps . | grep -qx net/http; then
+            echo "lightweight wrapper profile unexpectedly depends on net/http" >&2
+            exit 1
+          fi
+          GO_BUILD_TAGS=wasm_lite_http make build
 
       - name: Check code formatting
         run: |
@@ -100,4 +121,3 @@ jobs:
   #       with:
   #         version: latest
   #         args: --timeout=5m
-

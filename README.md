@@ -6,7 +6,10 @@ This SDK is used to develop the WASM Plugins for Higress in Go.
 
 You can also build wasm locally and copy it to a Docker image. This requires a local build environment:
 
-Go version: >= 1.24
+Prerequisites:
+
+- Go version: >= 1.24
+- Binaryen `wasm-opt` version 130 available in `PATH`
 
 The following is an example of building the plugin [request-block](examples/request-block).
 
@@ -14,8 +17,47 @@ The following is an example of building the plugin [request-block](examples/requ
 
 ```bash
 cd examples/request-block
-GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o main.wasm main.go
+make
 ```
+
+The default build uses `scripts/build-wasm.sh`. It compiles a stripped Go Wasm
+release artifact and then runs `wasm-opt -Oz --enable-bulk-memory`. The
+equivalent commands are:
+
+```bash
+GOOS=wasip1 GOARCH=wasm go build -trimpath -buildmode=c-shared \
+  -ldflags='-s -w -buildid=' -o main.unoptimized.wasm .
+wasm-opt main.unoptimized.wasm -Oz --enable-bulk-memory -o main.wasm
+rm -f main.unoptimized.wasm
+```
+
+Use `make build-debug` when an unstripped, non-Binaryen artifact is needed for
+diagnostics. `WASM_OPT=/path/to/wasm-opt make` can be used when Binaryen is not
+installed in `PATH`.
+
+### Opt-in lightweight HTTP callouts
+
+The existing `pkg/wrapper` HTTP client keeps its `net/http.Header` API by
+default for source compatibility. Plugins that want to avoid linking Go's full
+HTTP stack can import the additive lightweight package:
+
+```go
+import "github.com/higress-group/wasm-go/pkg/wrapper/httpcall"
+```
+
+Build those plugins with `wasm_lite_http` so the legacy HTTP implementation in
+`pkg/wrapper` is excluded:
+
+```bash
+GO_BUILD_TAGS=wasm_lite_http ../../scripts/build-wasm.sh -o main.wasm .
+```
+
+`GO_BUILD_TAGS` is passed to Go as `-tags`; an equivalent direct invocation is
+`go build -tags=wasm_lite_http ...`.
+
+The build tag only selects the HTTP API implementation. Binaryen `-Oz` remains
+the default post-link optimization in both modes. Existing plugins that do not
+set the tag retain the original `wrapper.HttpClient` and `net/http.Header` API.
 
 ### step2. build and push docker image
 
