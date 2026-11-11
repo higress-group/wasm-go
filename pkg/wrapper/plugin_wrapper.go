@@ -800,6 +800,7 @@ type CommonHttpCtx[PluginConfig any] struct {
 	// Cached request headers from the header phase
 	requestConnection      string
 	requestUpgrade         string
+	requestExpect          string
 	requestContentType     string
 	requestContentEncoding string
 	// Cached response headers from the header phase
@@ -1057,6 +1058,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 	// Cache request headers for later access outside of header phase
 	ctx.requestConnection, _ = proxywasm.GetHttpRequestHeader("connection")
 	ctx.requestUpgrade, _ = proxywasm.GetHttpRequestHeader("upgrade")
+	ctx.requestExpect, _ = proxywasm.GetHttpRequestHeader("expect")
 	ctx.requestContentType, _ = proxywasm.GetHttpRequestHeader("content-type")
 	ctx.requestContentEncoding, _ = proxywasm.GetHttpRequestHeader("content-encoding")
 
@@ -1127,7 +1129,8 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 	// Envoy shares the decoding buffer between filters. Allowing later headers
 	// to run lets an asynchronous successor resume and consume an incomplete
 	// body before this handler has finished buffering it.
-	if action == types.ActionContinue && !endOfStream && ctx.shouldBufferRequestBody() {
+	if action == types.ActionContinue && !endOfStream && ctx.shouldBufferRequestBody() &&
+		!ctx.requiresRequestHandshake() {
 		return types.HeaderStopIteration
 	}
 	return action
@@ -1138,6 +1141,29 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 func (ctx *CommonHttpCtx[PluginConfig]) shouldBufferRequestBody() bool {
 	return ctx.plugin.vm.onHttpRequestBody != nil &&
 		(ctx.requireRequestBody || (ctx.needRequestBody && !ctx.streamingRequestBody))
+}
+
+// requiresRequestHandshake preserves the original header flow for requests that
+// may wait for an upstream response before sending data. It only exempts the
+// automatic header hold: explicit plugin actions and body delivery settings,
+// including RequireRequestBody, remain unchanged. Use the original cached
+// headers so header transformations cannot hide the client's negotiation.
+func (ctx *CommonHttpCtx[PluginConfig]) requiresRequestHandshake() bool {
+	return strings.EqualFold(ctx.method, "CONNECT") ||
+		containsHeaderToken(ctx.requestExpect, "100-continue") ||
+		(strings.TrimSpace(ctx.requestUpgrade) != "" &&
+			containsHeaderToken(ctx.requestConnection, "upgrade"))
+}
+
+// containsHeaderToken compares complete comma-separated HTTP header tokens,
+// ignoring case and surrounding whitespace, without matching substrings.
+func containsHeaderToken(value, token string) bool {
+	for _, part := range strings.Split(value, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), token) {
+			return true
+		}
+	}
+	return false
 }
 
 // deliverBufferedRequestBody invokes the complete-body handler once, including

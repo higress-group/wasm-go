@@ -122,6 +122,15 @@ from resuming Envoy's shared request buffer before this plugin has processed the
 complete body. Consequently, later header handlers and their external calls run
 after body processing rather than concurrently with the request upload.
 
+Requests carrying `Expect: 100-continue`, valid HTTP Upgrade headers, or the
+`CONNECT` method retain their original header action so protocol negotiation
+can finish before data arrives. This exception also applies when
+`RequireRequestBody()` is set: it does not cancel required body delivery or
+change body processing settings. These compatibility paths retain the previous
+shared-buffer behavior and do not gain the new complete-body header barrier.
+If HCM handles 100 Continue locally and removes Expect before filters run, the
+ordinary automatic header hold still applies.
+
 Per-request `DontReadRequestBody()` and streaming request body processing retain
 their existing behavior. Binary, encoded and WebSocket requests retain the
 existing automatic opt-outs unless `RequireRequestBody()` explicitly overrides
@@ -137,5 +146,8 @@ For a real `transformer` → `ai-token-ratelimit` regression check, use
 [`test/integration/buffered_request_body.py`](test/integration/buffered_request_body.py).
 It builds the community plugins against this SDK and checks split uploads,
 trailer termination, binary opt-outs and rate-limit rejection in an isolated
-Higress Envoy with Redis. Run it with `--help` for prerequisites and arguments;
+Higress Envoy with Redis. A complete-body fixture also checks upstream/local
+100 Continue, WebSocket 101 and CONNECT 200 before sending request data, including
+required-body delivery and Connection token lists.
+Run it with `--help` for prerequisites and arguments;
 `--baseline-sdk` additionally reproduces the failure using an unpatched checkout.

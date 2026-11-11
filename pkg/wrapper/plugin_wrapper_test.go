@@ -99,7 +99,7 @@ func TestRequireRequestBodyRawDelivery(t *testing.T) {
 func TestRequireRequestBodyWebSocketRequestOnly(t *testing.T) {
 	h := newBodyDeliveryHarness(t, true)
 	headers := [][2]string{{"connection", "upgrade"}, {"upgrade", "websocket"}}
-	require.Equal(t, types.HeaderStopIteration, h.callRequestHeaders(headers, false))
+	require.Equal(t, types.ActionContinue, h.callRequestHeaders(headers, false))
 	payload := []byte{0x81, 0x02, 'h', 'i'}
 	require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, payload, true))
 	require.Equal(t, payload, h.requestBody)
