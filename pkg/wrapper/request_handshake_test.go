@@ -77,3 +77,15 @@ func TestRequestHandshakeCompatibility(t *testing.T) {
 		})
 	}
 }
+
+// TestRequestHandshakeConnectMethodIsCaseSensitive ensures only the exact
+// uppercase CONNECT method bypasses the automatic header hold. HTTP methods
+// are case-sensitive, so mixed-case variants still require body buffering.
+func TestRequestHandshakeConnectMethodIsCaseSensitive(t *testing.T) {
+	for _, method := range []string{"connect", "Connect", "cOnNeCt"} {
+		t.Run(method, func(t *testing.T) {
+			h := newBodyDeliveryHarness(t, false)
+			require.Equal(t, types.HeaderStopIteration, h.callRequestHeaders([][2]string{{":method", method}}, false))
+		})
+	}
+}

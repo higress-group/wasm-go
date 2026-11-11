@@ -1149,7 +1149,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) shouldBufferRequestBody() bool {
 // including RequireRequestBody, remain unchanged. Use the original cached
 // headers so header transformations cannot hide the client's negotiation.
 func (ctx *CommonHttpCtx[PluginConfig]) requiresRequestHandshake() bool {
-	return strings.EqualFold(ctx.method, "CONNECT") ||
+	return ctx.method == "CONNECT" ||
 		containsHeaderToken(ctx.requestExpect, "100-continue") ||
 		(strings.TrimSpace(ctx.requestUpgrade) != "" &&
 			containsHeaderToken(ctx.requestConnection, "upgrade"))
