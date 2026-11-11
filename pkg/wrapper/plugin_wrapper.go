@@ -800,6 +800,7 @@ type CommonHttpCtx[PluginConfig any] struct {
 	// Cached request headers from the header phase
 	requestConnection      string
 	requestUpgrade         string
+	requestExpect          string
 	requestContentType     string
 	requestContentEncoding string
 	// Cached response headers from the header phase
@@ -1039,6 +1040,9 @@ func (ctx *CommonHttpCtx[PluginConfig]) IsBinaryResponseBody() bool {
 	return ctx.responseContentEncoding != ""
 }
 
+// OnHttpRequestHeaders runs the matched header handler before deciding whether
+// this request needs a complete body. Buffered requests hold subsequent headers;
+// explicit plugin actions, request opt-outs and streaming processing take precedence.
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, endOfStream bool) types.Action {
 	defer recoverFunc()
 	ctx.executionPhase = iface.DecodeHeader
@@ -1054,6 +1058,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 	// Cache request headers for later access outside of header phase
 	ctx.requestConnection, _ = proxywasm.GetHttpRequestHeader("connection")
 	ctx.requestUpgrade, _ = proxywasm.GetHttpRequestHeader("upgrade")
+	ctx.requestExpect, _ = proxywasm.GetHttpRequestHeader("expect")
 	ctx.requestContentType, _ = proxywasm.GetHttpRequestHeader("content-type")
 	ctx.requestContentEncoding, _ = proxywasm.GetHttpRequestHeader("content-encoding")
 
@@ -1107,30 +1112,74 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestHeaders(numHeaders int, end
 		ctx.needRequestBody = false
 		ctx.needResponseBody = false
 	}
-	if ctx.plugin.vm.onHttpRequestHeaders == nil {
-		return types.ActionContinue
+	action := types.ActionContinue
+	if ctx.plugin.vm.onHttpRequestHeaders != nil {
+		action = ctx.plugin.vm.onHttpRequestHeaders(ctx, *config)
 	}
-	action := ctx.plugin.vm.onHttpRequestHeaders(ctx, *config)
 	if ctx.requireRequestBody && ctx.plugin.vm.onHttpRequestBody == nil {
 		return types.ActionPause
 	}
 	if ctx.requireRequestBody && ctx.requestHeaderEndOfStream && !ctx.requestBodyCallbackInvoked {
-		bodyAction := ctx.deliverRequiredRequestBody(0)
-		if action == types.ActionPause {
+		bodyAction := ctx.deliverBufferedRequestBody(0)
+		if action != types.ActionContinue {
 			return action
 		}
 		return bodyAction
 	}
+	// Envoy shares the decoding buffer between filters. Allowing later headers
+	// to run lets an asynchronous successor resume and consume an incomplete
+	// body before this handler has finished buffering it.
+	if action == types.ActionContinue && !endOfStream && ctx.shouldBufferRequestBody() &&
+		!ctx.requiresRequestHandshake() {
+		return types.HeaderStopIteration
+	}
 	return action
 }
 
-func (ctx *CommonHttpCtx[PluginConfig]) deliverRequiredRequestBody(bodySize int) types.Action {
+// shouldBufferRequestBody describes the effective per-request mode after the
+// header callback. Required delivery overrides opt-outs and streaming callbacks.
+func (ctx *CommonHttpCtx[PluginConfig]) shouldBufferRequestBody() bool {
+	return ctx.plugin.vm.onHttpRequestBody != nil &&
+		(ctx.requireRequestBody || (ctx.needRequestBody && !ctx.streamingRequestBody))
+}
+
+// requiresRequestHandshake preserves the original header flow for requests that
+// may wait for an upstream response before sending data. It only exempts the
+// automatic header hold: explicit plugin actions and body delivery settings,
+// including RequireRequestBody, remain unchanged. Use the original cached
+// headers so header transformations cannot hide the client's negotiation.
+func (ctx *CommonHttpCtx[PluginConfig]) requiresRequestHandshake() bool {
+	return ctx.method == "CONNECT" ||
+		containsHeaderToken(ctx.requestExpect, "100-continue") ||
+		(strings.TrimSpace(ctx.requestUpgrade) != "" &&
+			containsHeaderToken(ctx.requestConnection, "upgrade"))
+}
+
+// containsHeaderToken compares complete comma-separated HTTP header tokens,
+// ignoring case and surrounding whitespace, without matching substrings.
+func containsHeaderToken(value, token string) bool {
+	for _, part := range strings.Split(value, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), token) {
+			return true
+		}
+	}
+	return false
+}
+
+// deliverBufferedRequestBody invokes the complete-body handler once, including
+// empty bodies. Legacy reads retain fail-open behavior; required reads reject
+// unavailable or truncated data. The handler's continuation action is preserved.
+func (ctx *CommonHttpCtx[PluginConfig]) deliverBufferedRequestBody(bodySize int) types.Action {
 	var body []byte
 	var err error
 	if bodySize > 0 {
 		body, err = proxywasm.GetHttpRequestBody(0, bodySize)
 	}
-	if err != nil || len(body) != bodySize {
+	if err != nil || (ctx.requireRequestBody && len(body) != bodySize) {
+		if !ctx.requireRequestBody {
+			ctx.plugin.vm.log.Warnf("get request body failed: %v", err)
+			return types.ActionContinue
+		}
 		ctx.plugin.vm.log.Warnf("get required request body failed: %v, expected %d bytes, got %d", err, bodySize, len(body))
 		if sendErr := proxywasm.SendHttpResponse(RequiredRequestBodyFailureStatusCode, nil, nil, -1); sendErr != nil {
 			ctx.plugin.vm.log.Errorf("send request body failure response failed: %v", sendErr)
@@ -1141,6 +1190,9 @@ func (ctx *CommonHttpCtx[PluginConfig]) deliverRequiredRequestBody(bodySize int)
 	return ctx.plugin.vm.onHttpRequestBody(ctx, *ctx.config, body)
 }
 
+// OnHttpRequestBody processes a streaming chunk or holds the complete host
+// buffer until DATA ends the request. bodySize is the current available buffer
+// size, not a chunk-size delta. Trailers may supply the final completion instead.
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStream bool) types.Action {
 	defer recoverFunc()
 	ctx.executionPhase = iface.DecodeData
@@ -1165,7 +1217,7 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 		if !endOfStream {
 			return types.ActionPause
 		}
-		return ctx.deliverRequiredRequestBody(bodySize)
+		return ctx.deliverBufferedRequestBody(bodySize)
 	}
 	if !ctx.needRequestBody {
 		return types.ActionContinue
@@ -1184,29 +1236,37 @@ func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestBody(bodySize int, endOfStr
 		return types.ActionContinue
 	}
 	if ctx.plugin.vm.onHttpRequestBody != nil {
-		ctx.requestBodySize += bodySize
+		if ctx.requestBodyCallbackInvoked {
+			return types.ActionContinue
+		}
+		ctx.requestBodySize = bodySize
 		if !endOfStream {
 			return types.ActionPause
 		}
-		body, err := proxywasm.GetHttpRequestBody(0, ctx.requestBodySize)
-		if err != nil {
-			ctx.plugin.vm.log.Warnf("get request body failed: %v", err)
-			return types.ActionContinue
-		}
-		return ctx.plugin.vm.onHttpRequestBody(ctx, *ctx.config, body)
+		return ctx.deliverBufferedRequestBody(bodySize)
 	}
 	return types.ActionContinue
 }
 
+// OnHttpRequestTrailers completes buffered delivery when the request ends with
+// trailers instead of an end-stream DATA frame. Skipped and streaming requests
+// continue unchanged, and a previously delivered body is never delivered again.
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpRequestTrailers(numTrailers int) types.Action {
 	defer recoverFunc()
-	if ctx.config == nil || !ctx.requireRequestBody || ctx.requestBodyCallbackInvoked {
+	if ctx.config == nil || ctx.requestBodyCallbackInvoked {
 		return types.ActionContinue
 	}
 	if ctx.plugin.vm.onHttpRequestBody == nil {
-		return types.ActionPause
+		if ctx.requireRequestBody {
+			return types.ActionPause
+		}
+		return types.ActionContinue
 	}
-	return ctx.deliverRequiredRequestBody(ctx.requestBodySize)
+	if !ctx.shouldBufferRequestBody() {
+		return types.ActionContinue
+	}
+	ctx.executionPhase = iface.DecodeData
+	return ctx.deliverBufferedRequestBody(ctx.requestBodySize)
 }
 
 func (ctx *CommonHttpCtx[PluginConfig]) OnHttpResponseHeaders(numHeaders int, endOfStream bool) types.Action {

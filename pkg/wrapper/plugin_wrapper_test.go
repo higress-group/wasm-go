@@ -86,7 +86,7 @@ func TestRequireRequestBodyRawDelivery(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newBodyDeliveryHarness(t, true)
-			require.Equal(t, types.ActionContinue, h.callRequestHeaders(tt.headers, false))
+			require.Equal(t, types.HeaderStopIteration, h.callRequestHeaders(tt.headers, false))
 			require.Equal(t, types.ActionPause, h.host.CallOnRequestBody(h.contextID, payload[:3], false))
 			require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, payload[3:], true))
 			require.Equal(t, 1, h.requestBodyCalls)
@@ -185,7 +185,7 @@ func TestRequireRequestBodyWithoutBufferedHandlerStreamingCallback(t *testing.T)
 
 func TestRequireRequestBodyEmptyTerminalBody(t *testing.T) {
 	h := newBodyDeliveryHarness(t, true)
-	require.Equal(t, types.ActionContinue, h.callRequestHeaders(nil, false))
+	require.Equal(t, types.HeaderStopIteration, h.callRequestHeaders(nil, false))
 	require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, nil, true))
 	require.Equal(t, 1, h.requestBodyCalls)
 	require.Empty(t, h.requestBody)
@@ -196,7 +196,7 @@ func TestRequireRequestBodyTrailersDeliverBufferedBody(t *testing.T) {
 	h := newBodyDeliveryHarness(t, true)
 	payload := []byte{0, 0, 0, 0, 1, 'x'}
 	headers := [][2]string{{"content-type", "application/grpc"}}
-	require.Equal(t, types.ActionContinue, h.callRequestHeaders(headers, false))
+	require.Equal(t, types.HeaderStopIteration, h.callRequestHeaders(headers, false))
 	require.Equal(t, types.ActionPause, h.host.CallOnRequestBody(h.contextID, payload, false))
 	require.Zero(t, h.requestBodyCalls)
 	require.Equal(t, types.ActionContinue, h.host.CallOnRequestTrailers(h.contextID, [][2]string{{"x-checksum", "abc"}}))
@@ -212,7 +212,7 @@ func TestRequireRequestBodyOverridesDontReadRequestBody(t *testing.T) {
 	h := newBodyDeliveryHarness(t, true, func(ctx HttpContext) {
 		ctx.DontReadRequestBody()
 	})
-	require.Equal(t, types.ActionContinue, h.callRequestHeaders(nil, false))
+	require.Equal(t, types.HeaderStopIteration, h.callRequestHeaders(nil, false))
 	payload := []byte("required")
 	require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, payload, true))
 	require.Equal(t, 1, h.requestBodyCalls)
@@ -226,7 +226,7 @@ func TestRequireRequestBodyBufferLimitExceeded(t *testing.T) {
 	h := newBodyDeliveryHarness(t, true, func(ctx HttpContext) {
 		ctx.SetRequestBodyBufferLimit(bufferLimit)
 	})
-	require.Equal(t, types.ActionContinue, h.callRequestHeaders(nil, false))
+	require.Equal(t, types.HeaderStopIteration, h.callRequestHeaders(nil, false))
 	require.Equal(t, types.ActionPause, h.host.CallOnRequestBody(h.contextID, payload[:2], false))
 	require.Equal(t, types.ActionPause, h.host.CallOnRequestBody(h.contextID, payload[2:], true))
 	require.Zero(t, h.requestBodyCalls)
@@ -256,7 +256,7 @@ func TestRequestBodyLegacySkips(t *testing.T) {
 
 	t.Run("plain body remains delivered", func(t *testing.T) {
 		h := newBodyDeliveryHarness(t, false)
-		require.Equal(t, types.ActionContinue, h.callRequestHeaders(nil, false))
+		require.Equal(t, types.HeaderStopIteration, h.callRequestHeaders(nil, false))
 		require.Equal(t, types.ActionContinue, h.host.CallOnRequestBody(h.contextID, []byte("plain"), true))
 		require.Equal(t, []byte("plain"), h.requestBody)
 		require.Equal(t, 1, h.requestBodyCalls)

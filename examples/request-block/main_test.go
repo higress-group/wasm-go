@@ -156,7 +156,7 @@ func TestBlockUrlByKeyword(t *testing.T) {
 			{":authority", "test.com"},
 			{":path", "/api/blocked/endpoint"},
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 
 		localResponse := host.GetLocalResponse()
 		require.NotNil(t, localResponse)
@@ -177,7 +177,7 @@ func TestBlockUrlByExactMatch(t *testing.T) {
 			{":authority", "test.com"},
 			{":path", "/exact-block"},
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 
 		localResponse := host.GetLocalResponse()
 		require.NotNil(t, localResponse)
@@ -198,7 +198,7 @@ func TestBlockUrlByRegexp(t *testing.T) {
 			{":authority", "test.com"},
 			{":path", "/api/v1/blocked"},
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 
 		localResponse := host.GetLocalResponse()
 		require.NotNil(t, localResponse)
@@ -220,13 +220,27 @@ func TestBlockByHeaders(t *testing.T) {
 			{":path", "/api/valid"},
 			{"blocked-header", "some-value"},
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 
 		localResponse := host.GetLocalResponse()
 		require.NotNil(t, localResponse)
 		require.Equal(t, uint32(403), localResponse.StatusCode)
 		require.Equal(t, "Access denied", string(localResponse.Data))
 		host.CompleteHttp()
+	})
+}
+
+// TestBodyWithoutExplicitHeaders verifies implicit request initialization also
+// accepts the wrapper's header pause while waiting for a complete body.
+func TestBodyWithoutExplicitHeaders(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		host, status := test.NewTestHost(json.RawMessage(`{"block_bodies":["blocked-content"]}`))
+		defer host.Reset()
+		require.Equal(t, types.OnPluginStartStatusOK, status)
+		require.Equal(t, types.ActionContinue, host.CallOnHttpRequestBody([]byte("blocked-content")))
+		response := host.GetLocalResponse()
+		require.NotNil(t, response)
+		require.Equal(t, uint32(403), response.StatusCode)
 	})
 }
 
@@ -242,7 +256,7 @@ func TestBlockByBody(t *testing.T) {
 			{":authority", "test.com"},
 			{":path", "/api/safe/endpoint"},
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 
 		// Test blocked by body content
 		action = host.CallOnHttpRequestBody([]byte("This is blocked-content in the body"))
@@ -268,7 +282,7 @@ func TestAllowValidRequest(t *testing.T) {
 			{":path", "/api/valid/endpoint"},
 			{"valid-header", "valid-value"},
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 
 		localResponse := host.GetLocalResponse()
 		require.Nil(t, localResponse, "Valid request should not be blocked")
@@ -287,7 +301,7 @@ func TestCaseInsensitiveBlocking(t *testing.T) {
 			{":authority", "test.com"},
 			{":path", "/API/BLOCKED/ENDPOINT"}, // Uppercase should still be blocked
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 
 		localResponse := host.GetLocalResponse()
 		require.NotNil(t, localResponse)
@@ -316,7 +330,7 @@ func TestCustomBlockedCode(t *testing.T) {
 			{":authority", "test.com"},
 			{":path", "/api/rate-limit/test"},
 		})
-		require.Equal(t, types.ActionContinue, action)
+		require.Equal(t, types.HeaderStopIteration, action)
 
 		localResponse := host.GetLocalResponse()
 		require.NotNil(t, localResponse)
@@ -440,8 +454,8 @@ func TestOnHttpRequestHeadersErrorHandling(t *testing.T) {
 				// 缺少 :path 头部
 			})
 
-			require.Equal(t, types.ActionContinue, action)
-			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+			require.Equal(t, types.HeaderStopIteration, action)
+			require.Equal(t, types.HeaderStopIteration, host.GetHttpStreamAction())
 
 			localResponse := host.GetLocalResponse()
 			require.Nil(t, localResponse)
@@ -496,8 +510,8 @@ func TestOnHttpRequestHeadersErrorHandling(t *testing.T) {
 				{":path", "/api/test"},
 			})
 
-			require.Equal(t, types.ActionContinue, action)
-			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+			require.Equal(t, types.HeaderStopIteration, action)
+			require.Equal(t, types.HeaderStopIteration, host.GetHttpStreamAction())
 
 			host.CompleteHttp()
 		})
@@ -528,7 +542,7 @@ func TestOnHttpRequestBodyCaseSensitive(t *testing.T) {
 				{":authority", "test.com"},
 				{":path", "/api/test"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			// 测试大写内容应该被阻止
 			action = host.CallOnHttpRequestBody([]byte("This contains BLOCKED content"))
@@ -560,7 +574,7 @@ func TestOnHttpRequestBodyCaseSensitive(t *testing.T) {
 				{":authority", "test.com"},
 				{":path", "/api/test"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			// 测试大写内容应该被阻止（因为case_sensitive为false）
 			action = host.CallOnHttpRequestBody([]byte("This contains BLOCKED content"))
@@ -600,14 +614,14 @@ func TestBlockUrlByRegexpEdgeCases(t *testing.T) {
 				{":authority", "test.com"},
 				{":path", "/api/v2/users/123/posts"},
 			})
-			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, types.HeaderStopIteration, action)
 
 			localResponse := host.GetLocalResponse()
 			require.NotNil(t, localResponse)
 			require.Equal(t, uint32(403), localResponse.StatusCode)
 
 			// 确保请求完成
-			require.Equal(t, types.ActionContinue, host.GetHttpStreamAction())
+			require.Equal(t, types.HeaderStopIteration, host.GetHttpStreamAction())
 			host.CompleteHttp()
 		})
 
