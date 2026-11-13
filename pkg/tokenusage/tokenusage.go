@@ -16,6 +16,7 @@ package tokenusage
 
 import (
 	"bytes"
+	"encoding/json"
 	"slices"
 
 	"github.com/higress-group/wasm-go/pkg/wrapper"
@@ -88,7 +89,6 @@ const (
 	OutputTokenDetailsKeyGeminiThoughtsTokenCount = "thoughts_token_count"
 
 	ctxKeyDeltaSSEMessage = "delta_sse_message"
-	ctxKeyDeltaBeginning  = "delta_beginning"
 )
 
 type TokenUsage struct {
@@ -132,24 +132,24 @@ func GetTokenUsage(ctx wrapper.HttpContext, body []byte) TokenUsage {
 }
 
 func mergeLargeResponseAPIChunks(ctx wrapper.HttpContext, chunk []byte) []byte {
-	if bytes.Contains(chunk, []byte(`"response.completed"`)) && !bytes.Contains(chunk, []byte(`"usage"`)) {
-		ctx.SetContext(ctxKeyDeltaBeginning, true)
-	}
-
-	if ctx.GetBoolContext(ctxKeyDeltaBeginning, false) {
-		// end of streaming
-		if len(bytes.TrimSpace(chunk)) == 0 {
-			ctx.SetContext(ctxKeyDeltaBeginning, false)
-			chunk = ctx.GetByteSliceContext(ctxKeyDeltaSSEMessage, chunk)
-			ctx.SetContext(ctxKeyDeltaSSEMessage, nil)
-		} else {
-			deltaMessage := ctx.GetByteSliceContext(ctxKeyDeltaSSEMessage, []byte{})
-			deltaMessage = append(deltaMessage, chunk...)
-			ctx.SetContext(ctxKeyDeltaSSEMessage, deltaMessage)
+	pending := ctx.GetByteSliceContext(ctxKeyDeltaSSEMessage, nil)
+	if len(pending) == 0 {
+		// response.completed may appear only in the final transport fragment.
+		jsonStart := bytes.IndexByte(chunk, '{')
+		if jsonStart == -1 {
+			return chunk
 		}
+		chunk = chunk[jsonStart:]
 	}
 
-	return chunk
+	message := append(pending, chunk...)
+	if !json.Valid(message) {
+		ctx.SetContext(ctxKeyDeltaSSEMessage, bytes.Clone(message))
+		return nil
+	}
+
+	ctx.SetContext(ctxKeyDeltaSSEMessage, nil)
+	return message
 }
 
 func ExtractModel(ctx wrapper.HttpContext, body []byte, u *TokenUsage) {
