@@ -38,7 +38,7 @@ type DefaultLog struct {
 }
 
 func (l *DefaultLog) log(level LogLevel, msg string) {
-	value, err := proxywasm.CallForeignFunction("get_log_level", nil)
+	value, err := callForeignFunction("get_log_level", nil)
 	var envoyLogLevel LogLevel
 	if err != nil {
 		envoyLogLevel = LogLevelTrace
@@ -71,7 +71,7 @@ func (l *DefaultLog) log(level LogLevel, msg string) {
 }
 
 func (l *DefaultLog) logFormat(level LogLevel, format string, args ...interface{}) {
-	value, err := proxywasm.CallForeignFunction("get_log_level", nil)
+	value, err := callForeignFunction("get_log_level", nil)
 	var envoyLogLevel LogLevel
 	if err != nil {
 		envoyLogLevel = LogLevelTrace
