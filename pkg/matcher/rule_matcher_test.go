@@ -208,6 +208,47 @@ func TestHostMatch(t *testing.T) {
 	}
 }
 
+func TestHostMatchASCIICase(t *testing.T) {
+	tests := []struct {
+		name        string
+		matchType   MatchType
+		configured  string
+		requestHost string
+		want        bool
+	}{
+		{name: "exact identical", matchType: Exact, configured: "www.example.com", requestHost: "www.example.com", want: true},
+		{name: "exact configured uppercase", matchType: Exact, configured: "WWW.EXAMPLE.COM", requestHost: "www.example.com", want: true},
+		{name: "exact configured lowercase", matchType: Exact, configured: "www.example.com", requestHost: "WWW.EXAMPLE.COM", want: true},
+		{name: "exact mixed case", matchType: Exact, configured: "WwW.ExAmPlE.CoM", requestHost: "wWw.eXaMpLe.cOm", want: true},
+		{name: "prefix configured uppercase", matchType: Prefix, configured: "WWW.", requestHost: "www.example.com", want: true},
+		{name: "prefix configured lowercase", matchType: Prefix, configured: "www.", requestHost: "WWW.EXAMPLE.COM", want: true},
+		{name: "prefix mixed case", matchType: Prefix, configured: "WwW.ExAm", requestHost: "wWw.eXaMpLe.cOm", want: true},
+		{name: "suffix configured uppercase", matchType: Suffix, configured: ".EXAMPLE.COM", requestHost: "www.example.com", want: true},
+		{name: "suffix configured lowercase", matchType: Suffix, configured: ".example.com", requestHost: "WWW.EXAMPLE.COM", want: true},
+		{name: "suffix mixed case", matchType: Suffix, configured: ".ExAmPlE.CoM", requestHost: "www.eXaMpLe.cOm", want: true},
+		{name: "exact port", matchType: Exact, configured: "WWW.EXAMPLE.COM", requestHost: "www.example.com:8080", want: true},
+		{name: "prefix port", matchType: Prefix, configured: "WWW.", requestHost: "www.example.com:8080", want: true},
+		{name: "suffix port", matchType: Suffix, configured: ".EXAMPLE.COM", requestHost: "www.example.com:8080", want: true},
+		{name: "empty suffix", matchType: Suffix, configured: "", requestHost: "MiXeD.Example.COM", want: true},
+		{name: "non ASCII identical", matchType: Exact, configured: "bücher.example", requestHost: "bücher.example", want: true},
+		{name: "non ASCII not folded", matchType: Exact, configured: "bücher.example", requestHost: "BÜCHER.EXAMPLE", want: false},
+		{name: "ASCII around non ASCII folded", matchType: Exact, configured: "Exämple.COM", requestHost: "exämple.com", want: true},
+		{name: "IPv6 hexadecimal case", matchType: Exact, configured: "[2001:db8::1]", requestHost: "[2001:DB8::1]", want: true},
+		{name: "IPv6 hexadecimal case with port", matchType: Exact, configured: "[2001:db8::1]", requestHost: "[2001:DB8::1]:8443", want: true},
+		{name: "IPv6 text not normalized", matchType: Exact, configured: "[2001:0db8::1]", requestHost: "[2001:DB8::1]", want: false},
+		{name: "exact trailing dot not added", matchType: Exact, configured: "Example.com", requestHost: "example.com.", want: false},
+		{name: "suffix trailing dot not added", matchType: Suffix, configured: ".Example.com", requestHost: "www.example.com.", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rule := RuleConfig[customConfig]{hosts: []HostMatcher{{matchType: tt.matchType, host: tt.configured}}}
+			var matcher RuleMatcher[customConfig]
+			assert.Equal(t, tt.want, matcher.hostMatch(rule, tt.requestHost))
+		})
+	}
+}
+
 func TestServiceMatch(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -243,6 +284,16 @@ func TestServiceMatch(t *testing.T) {
 				},
 			},
 			service: "outbound|443||qwen.dns",
+			result:  false,
+		},
+		{
+			name: "case remains significant",
+			config: RuleConfig[customConfig]{
+				services: map[string]struct{}{
+					"qwen.dns": {},
+				},
+			},
+			service: "outbound|443||QWEN.DNS",
 			result:  false,
 		},
 		{
