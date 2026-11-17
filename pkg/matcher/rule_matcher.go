@@ -378,20 +378,50 @@ func stripPortFromHost(reqHost string) string {
 	return reqHost
 }
 
+func equalFoldASCII(s1, s2 string) bool {
+	if s1 == s2 {
+		return true
+	}
+	if len(s1) != len(s2) {
+		return false
+	}
+	for index := 0; index < len(s1); index++ {
+		char1, char2 := s1[index], s2[index]
+		if 'A' <= char1 && char1 <= 'Z' {
+			char1 += 'a' - 'A'
+		}
+		if 'A' <= char2 && char2 <= 'Z' {
+			char2 += 'a' - 'A'
+		}
+		if char1 != char2 {
+			return false
+		}
+	}
+	return true
+}
+
+func hasPrefixFoldASCII(s, prefix string) bool {
+	return len(s) >= len(prefix) && equalFoldASCII(s[:len(prefix)], prefix)
+}
+
+func hasSuffixFoldASCII(s, suffix string) bool {
+	return len(s) >= len(suffix) && equalFoldASCII(s[len(s)-len(suffix):], suffix)
+}
+
 func (m RuleMatcher[PluginConfig]) hostMatch(rule RuleConfig[PluginConfig], reqHost string) bool {
 	reqHost = stripPortFromHost(reqHost)
 	for _, hostMatch := range rule.hosts {
 		switch hostMatch.matchType {
 		case Suffix:
-			if strings.HasSuffix(reqHost, hostMatch.host) {
+			if hasSuffixFoldASCII(reqHost, hostMatch.host) {
 				return true
 			}
 		case Prefix:
-			if strings.HasPrefix(reqHost, hostMatch.host) {
+			if hasPrefixFoldASCII(reqHost, hostMatch.host) {
 				return true
 			}
 		case Exact:
-			if reqHost == hostMatch.host {
+			if equalFoldASCII(reqHost, hostMatch.host) {
 				return true
 			}
 		default:

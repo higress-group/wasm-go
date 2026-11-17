@@ -145,6 +145,54 @@ func TestSetDomainNameAndGetMatchConfig(t *testing.T) {
 	})
 }
 
+func TestDomainMatchASCIICaseBlocksRequest(t *testing.T) {
+	test.RunTest(t, func(t *testing.T) {
+		tests := []struct {
+			name             string
+			configuredDomain string
+			requestDomain    string
+		}{
+			{name: "exact", configuredDomain: "blocked.example.com", requestDomain: "blocked.example.com"},
+			{name: "configured uppercase", configuredDomain: "BLOCKED.EXAMPLE.COM", requestDomain: "blocked.example.com"},
+			{name: "configured lowercase", configuredDomain: "blocked.example.com", requestDomain: "BLOCKED.EXAMPLE.COM"},
+			{name: "mixed case", configuredDomain: "BlOcKeD.eXaMpLe.CoM", requestDomain: "bLoCkEd.ExAmPlE.cOm"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				config, err := json.Marshal(map[string]interface{}{
+					"_rules_": []map[string]interface{}{
+						{
+							"_match_domain_":   []string{tt.configuredDomain},
+							"blocked_code":     403,
+							"blocked_message":  "domain blocked",
+							"case_sensitive":   true,
+							"block_urls":       []string{"unused"},
+							"block_exact_urls": []string{"/blocked"},
+						},
+					},
+				})
+				require.NoError(t, err)
+				host, status := test.NewTestHost(config)
+				defer host.Reset()
+				require.Equal(t, types.OnPluginStartStatusOK, status)
+
+				action := host.CallOnHttpRequestHeaders([][2]string{
+					{":authority", tt.requestDomain},
+					{":path", "/blocked"},
+				})
+
+				require.Equal(t, types.HeaderStopIteration, action)
+				localResponse := host.GetLocalResponse()
+				require.NotNil(t, localResponse)
+				require.Equal(t, uint32(403), localResponse.StatusCode)
+				require.Equal(t, "domain blocked", string(localResponse.Data))
+				host.CompleteHttp()
+			})
+		}
+	})
+}
+
 func TestBlockUrlByKeyword(t *testing.T) {
 	test.RunTest(t, func(t *testing.T) {
 		host, status := test.NewTestHost(testConfig)

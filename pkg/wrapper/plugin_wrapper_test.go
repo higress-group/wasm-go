@@ -15,11 +15,13 @@
 package wrapper
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/proxytest"
 	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 type bodyDeliveryHarness struct {
@@ -261,4 +263,57 @@ func TestRequestBodyLegacySkips(t *testing.T) {
 		require.Equal(t, []byte("plain"), h.requestBody)
 		require.Equal(t, 1, h.requestBodyCalls)
 	})
+}
+
+func TestDomainMatchASCIICaseInvokesHandler(t *testing.T) {
+	type domainRuleConfig struct {
+		marker string
+	}
+
+	tests := []struct {
+		name              string
+		configuredDomain  string
+		requestDomain     string
+		expectedCallbacks int
+	}{
+		{name: "exact", configuredDomain: "example.com", requestDomain: "example.com", expectedCallbacks: 1},
+		{name: "configured uppercase", configuredDomain: "EXAMPLE.COM", requestDomain: "example.com", expectedCallbacks: 1},
+		{name: "configured lowercase", configuredDomain: "example.com", requestDomain: "EXAMPLE.COM", expectedCallbacks: 1},
+		{name: "mixed case", configuredDomain: "ExAmPlE.CoM", requestDomain: "eXaMpLe.cOm", expectedCallbacks: 1},
+		{name: "unmatched", configuredDomain: "example.com", requestDomain: "other.com", expectedCallbacks: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			callbackCalls := 0
+			vm := NewCommonVmCtx[domainRuleConfig](
+				"domain-match-test",
+				ParseConfig(func(json gjson.Result, config *domainRuleConfig) error {
+					config.marker = json.Get("marker").String()
+					return nil
+				}),
+				ProcessRequestHeaders(func(_ HttpContext, config domainRuleConfig) types.Action {
+					callbackCalls++
+					require.Equal(t, "domain-rule", config.marker)
+					return types.ActionContinue
+				}),
+			)
+			configuration := fmt.Sprintf(`{"_rules_":[{"_match_domain_":[%q],"marker":"domain-rule"}]}`, tt.configuredDomain)
+			host, reset := proxytest.NewHostEmulator(proxytest.NewEmulatorOption().
+				WithVMContext(vm).
+				WithPluginConfiguration([]byte(configuration)))
+			t.Cleanup(reset)
+			host.RegisterForeignFunction("get_log_level", func([]byte) []byte { return make([]byte, 4) })
+			require.Equal(t, types.OnPluginStartStatusOK, host.StartPlugin())
+			contextID := host.InitializeHttpContext()
+
+			action := host.CallOnRequestHeaders(contextID, [][2]string{
+				{":authority", tt.requestDomain},
+				{":path", "/"},
+			}, true)
+
+			require.Equal(t, types.ActionContinue, action)
+			require.Equal(t, tt.expectedCallbacks, callbackCalls)
+		})
+	}
 }
